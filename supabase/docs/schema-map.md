@@ -177,3 +177,57 @@ RLS:
 
 - Enabled
 - Policies will be added later
+
+## Exam / Question / Rubric RLS Rules
+
+### exams
+
+Admin:
+
+- Can access all exams.
+
+Professor:
+
+- Can read own exams.
+- Can create exams only with `professor_id = auth.uid()`.
+- Can update own non-archived exams.
+- Can delete only own draft exams.
+
+Student:
+
+- No direct access at this stage.
+
+### questions
+
+Admin:
+
+- Can access all questions.
+
+Professor:
+
+- Can read questions belonging to own exams.
+- Can create questions only inside own exams.
+- Can update questions belonging to own exams.
+- Can delete questions belonging to own exams.
+
+Student:
+
+- No direct access at this stage.
+
+### rubrics
+
+Admin:
+
+- Can access all rubrics.
+
+Professor:
+
+- Can read rubrics for questions belonging to own exams.
+- Can create rubrics for questions belonging to own exams.
+- Can update rubrics for questions belonging to own exams.
+- Can delete rubrics for questions belonging to own exams.
+
+Student:
+
+- No direct access at this stage.
+
