@@ -42,3 +42,44 @@ RLS:
 
 - Enabled
 - Policies will be added later
+
+## RLS Helper Functions
+
+These functions are used inside RLS policies to avoid direct recursive reads from `profiles`.
+
+### get_user_role(user_uuid)
+
+Returns the app role of a specific user.
+
+### current_user_role()
+
+Returns the app role of the currently authenticated user.
+
+### has_role(required_role)
+
+Returns true if the current authenticated user has the required role.
+
+### is_admin()
+
+Returns true if the current authenticated user is admin.
+
+### is_professor()
+
+Returns true if the current authenticated user is professor.
+
+### is_student()
+
+Returns true if the current authenticated user is student.
+
+Important:
+
+Role alone is not enough for access.
+
+Professor policies must also check ownership, such as:
+
+- `exam.professor_id = auth.uid()`
+
+Student policies must also check ownership and published status, such as:
+
+- result belongs to student
+- evaluation is published
