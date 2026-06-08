@@ -1,29 +1,8 @@
-import { redirect } from "next/navigation"
-import { createClient } from "@/lib/supabase/server"
+import { requireProfile } from "@/lib/auth"
 import { LogoutButton } from "@/components/logout-button"
-import { ROUTES } from "@/lib/routes"
 
 export default async function StudentDashboardPage() {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser()
-
-  if (userError || !user) {
-    redirect(ROUTES.AUTH.LOGIN)
-  }
-
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("full_name, email, role")
-    .eq("id", user.id)
-    .single()
-
-  if (profileError || !profile) {
-    throw new Error("Profile not found.")
-  }
+  const { profile } = await requireProfile()
 
   return (
     <main style={{ padding: "40px" }}>
