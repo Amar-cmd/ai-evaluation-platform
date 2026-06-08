@@ -110,3 +110,70 @@ Security note:
 
 - Role checks use RLS helper functions such as `is_admin()`.
 - This avoids direct recursive reads from `profiles` inside `profiles` policies.
+
+## exams
+
+Stores exam/evaluation sessions created by professors.
+
+Relation:
+
+- `exams.professor_id` references `profiles.id`
+
+Important fields:
+
+- `title`
+- `subject`
+- `course`
+- `batch`
+- `total_marks`
+- `status`
+- `published_at`
+
+RLS:
+
+- Enabled
+- Policies will be added later
+
+## questions
+
+Stores questions belonging to an exam.
+
+Relation:
+
+- `questions.exam_id` references `exams.id`
+
+Important fields:
+
+- `question_no`
+- `question_order`
+- `question_text`
+- `question_type`
+- `max_marks`
+- `model_answer`
+- `model_answer_status`
+- `ai_generated_model_answer`
+
+RLS:
+
+- Enabled
+- Policies will be added later
+
+## rubrics
+
+Stores rubric criteria for each question.
+
+Relation:
+
+- `rubrics.question_id` references `questions.id`
+
+Important fields:
+
+- `criterion_order`
+- `criterion_name`
+- `criterion_description`
+- `max_marks`
+
+RLS:
+
+- Enabled
+- Policies will be added later
