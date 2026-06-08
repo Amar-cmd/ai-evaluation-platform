@@ -1,22 +1,22 @@
-import Link from "next/link"
-import { requireProfessorOrAdmin } from "@/lib/auth"
-import { createClient } from "@/lib/supabase/server"
-import { ROUTES } from "@/lib/routes"
+import Link from "next/link";
+import { requireProfessorOrAdmin } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
+import { ROUTES } from "@/lib/routes";
 
 export default async function ProfessorExamsPage() {
-  const { profile } = await requireProfessorOrAdmin()
+  const { profile } = await requireProfessorOrAdmin();
 
-  const supabase = await createClient()
+  const supabase = await createClient();
 
   const { data: exams, error } = await supabase
     .from("exams")
     .select(
-      "id, title, subject, course, batch, total_marks, status, published_at, created_at"
+      "id, title, subject, course, batch, total_marks, status, published_at, created_at",
     )
-    .order("created_at", { ascending: false })
+    .order("created_at", { ascending: false });
 
   if (error) {
-    throw new Error(error.message)
+    throw new Error(error.message);
   }
 
   return (
@@ -98,7 +98,9 @@ export default async function ProfessorExamsPage() {
                 </p>
 
                 <p style={{ marginTop: "12px" }}>
-                  Next: add questions and rubrics later.
+                  <Link href={ROUTES.PROFESSOR.EXAM_DETAIL(exam.id)}>
+                    Open Exam
+                  </Link>
                 </p>
               </article>
             ))}
@@ -106,5 +108,5 @@ export default async function ProfessorExamsPage() {
         </section>
       )}
     </main>
-  )
+  );
 }

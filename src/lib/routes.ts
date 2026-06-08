@@ -10,6 +10,8 @@ export const ROUTES = {
     DASHBOARD: "/professor/dashboard",
     EXAMS: "/professor/exams",
     NEW_EXAM: "/professor/exams/new",
+    EXAM_DETAIL: (examId: string) => `/professor/exams/${examId}`,
+
   },
 
   STUDENT: {
