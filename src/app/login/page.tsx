@@ -63,6 +63,7 @@ export default function LoginPage() {
             required
             style={{ width: "100%", padding: "8px" }}
           />
+          <p>amar@gmail.com</p>
         </div>
 
         <button type="submit" disabled={loading}>
