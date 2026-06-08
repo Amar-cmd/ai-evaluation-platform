@@ -83,3 +83,30 @@ Student policies must also check ownership and published status, such as:
 
 - result belongs to student
 - evaluation is published
+
+### profiles RLS Rules
+
+Read:
+
+- Users can read their own profile.
+- Admins can read all profiles.
+
+Update:
+
+- Users can update their own basic profile.
+- Non-admin users cannot change `id`, `email`, or `role`.
+- Admins can update all profiles, including role changes.
+
+Insert:
+
+- No direct client insert policy.
+- Profiles are created automatically through the auth user trigger.
+
+Delete:
+
+- No client delete policy.
+
+Security note:
+
+- Role checks use RLS helper functions such as `is_admin()`.
+- This avoids direct recursive reads from `profiles` inside `profiles` policies.
