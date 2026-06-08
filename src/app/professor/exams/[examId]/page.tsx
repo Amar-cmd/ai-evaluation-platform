@@ -1,45 +1,73 @@
-import Link from "next/link"
-import { notFound } from "next/navigation"
-import { createQuestion } from "@/features/exams/actions"
-import { requireProfessorOrAdmin } from "@/lib/auth"
-import { createClient } from "@/lib/supabase/server"
-import { ROUTES } from "@/lib/routes"
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { createQuestion, createRubric } from "@/features/exams/actions";
+import { requireProfessorOrAdmin } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
+import { ROUTES } from "@/lib/routes";
 
 type ExamDetailPageProps = {
   params: Promise<{
-    examId: string
-  }>
-}
+    examId: string;
+  }>;
+};
 
 export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
-  const { examId } = await params
+  const { examId } = await params;
 
-  const { profile } = await requireProfessorOrAdmin()
+  const { profile } = await requireProfessorOrAdmin();
 
-  const supabase = await createClient()
+  const supabase = await createClient();
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
     .select(
-      "id, title, subject, course, batch, total_marks, status, published_at, created_at"
+      "id, title, subject, course, batch, total_marks, status, published_at, created_at",
     )
     .eq("id", examId)
-    .single()
+    .single();
 
   if (examError || !exam) {
-    notFound()
+    notFound();
   }
 
   const { data: questions, error: questionsError } = await supabase
     .from("questions")
     .select(
-      "id, question_no, question_order, question_text, question_type, max_marks, model_answer, model_answer_status, created_at"
+      "id, question_no, question_order, question_text, question_type, max_marks, model_answer, model_answer_status, created_at",
     )
     .eq("exam_id", examId)
-    .order("question_order", { ascending: true })
+    .order("question_order", { ascending: true });
 
   if (questionsError) {
-    throw new Error(questionsError.message)
+    throw new Error(questionsError.message);
+  }
+
+  const questionIds = questions.map((question) => question.id);
+
+  const { data: rubrics, error: rubricsError } =
+    questionIds.length > 0
+      ? await supabase
+          .from("rubrics")
+          .select(
+            "id, question_id, criterion_order, criterion_name, criterion_description, max_marks, created_at",
+          )
+          .in("question_id", questionIds)
+          .order("criterion_order", { ascending: true })
+      : { data: [], error: null };
+
+  if (rubricsError) {
+    throw new Error(rubricsError.message);
+  }
+
+  const rubricsByQuestion = new Map<string, typeof rubrics>();
+
+  for (const question of questions) {
+    rubricsByQuestion.set(question.id, []);
+  }
+
+  for (const rubric of rubrics || []) {
+    const existing = rubricsByQuestion.get(rubric.question_id) || [];
+    rubricsByQuestion.set(rubric.question_id, [...existing, rubric]);
   }
 
   return (
@@ -81,8 +109,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
         </p>
 
         <p>
-          <strong>Created:</strong>{" "}
-          {new Date(exam.created_at).toLocaleString()}
+          <strong>Created:</strong> {new Date(exam.created_at).toLocaleString()}
         </p>
       </section>
 
@@ -177,7 +204,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
         ) : (
           <div style={{ display: "grid", gap: "16px" }}>
             {questions.map((question) => (
-              <article
+                            <article
                 key={question.id}
                 style={{
                   border: "1px solid #ddd",
@@ -218,14 +245,143 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                   </p>
                 )}
 
-                <p style={{ marginTop: "12px" }}>
-                  Next: add rubric criteria later.
-                </p>
+                <hr style={{ margin: "24px 0" }} />
+
+                <RubricSection
+                  examId={exam.id}
+                  questionId={question.id}
+                  questionMaxMarks={Number(question.max_marks)}
+                  rubrics={rubricsByQuestion.get(question.id) || []}
+                  canEdit={profile.role === "professor"}
+                />
               </article>
             ))}
           </div>
         )}
       </section>
     </main>
+  );
+}
+
+type RubricRow = {
+  id: string
+  question_id: string
+  criterion_order: number
+  criterion_name: string
+  criterion_description: string | null
+  max_marks: number | string
+  created_at: string
+}
+
+function RubricSection({
+  examId,
+  questionId,
+  questionMaxMarks,
+  rubrics,
+  canEdit,
+}: {
+  examId: string
+  questionId: string
+  questionMaxMarks: number
+  rubrics: RubricRow[]
+  canEdit: boolean
+}) {
+  const rubricTotal = rubrics.reduce((total, rubric) => {
+    return total + Number(rubric.max_marks)
+  }, 0)
+
+  const isExactMatch = rubricTotal === questionMaxMarks
+  const isOverLimit = rubricTotal > questionMaxMarks
+  const isUnderLimit = rubricTotal < questionMaxMarks
+
+  return (
+    <section>
+      <h4>Rubric Criteria</h4>
+
+      <p>
+        <strong>Rubric Total:</strong> {rubricTotal} / {questionMaxMarks}
+      </p>
+
+      {rubrics.length > 0 && isExactMatch && (
+        <p style={{ color: "green" }}>
+          Rubric total matches question max marks.
+        </p>
+      )}
+
+      {rubrics.length > 0 && isOverLimit && (
+        <p style={{ color: "crimson" }}>
+          Warning: Rubric total exceeds question max marks.
+        </p>
+      )}
+
+      {rubrics.length > 0 && isUnderLimit && (
+        <p style={{ color: "orange" }}>
+          Warning: Rubric total is less than question max marks.
+        </p>
+      )}
+
+      {rubrics.length === 0 ? (
+        <p>No rubric criteria added yet.</p>
+      ) : (
+        <ol>
+          {rubrics.map((rubric) => (
+            <li key={rubric.id} style={{ marginBottom: "12px" }}>
+              <strong>
+                {rubric.criterion_name} — {rubric.max_marks} marks
+              </strong>
+
+              {rubric.criterion_description && (
+                <p>{rubric.criterion_description}</p>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {canEdit && (
+        <form action={createRubric} style={{ marginTop: "24px" }}>
+          <input type="hidden" name="examId" value={examId} />
+          <input type="hidden" name="questionId" value={questionId} />
+
+          <div style={{ marginBottom: "12px" }}>
+            <label>Criterion Name *</label>
+            <br />
+            <input
+              name="criterionName"
+              required
+              placeholder="Example: Concept clarity"
+              style={{ width: "100%", padding: "8px" }}
+            />
+          </div>
+
+          <div style={{ marginBottom: "12px" }}>
+            <label>Criterion Description</label>
+            <br />
+            <textarea
+              name="criterionDescription"
+              rows={3}
+              placeholder="Explain what the student should include for this criterion."
+              style={{ width: "100%", padding: "8px" }}
+            />
+          </div>
+
+          <div style={{ marginBottom: "12px" }}>
+            <label>Max Marks *</label>
+            <br />
+            <input
+              name="maxMarks"
+              type="number"
+              min="0"
+              step="0.01"
+              required
+              placeholder="Example: 2"
+              style={{ width: "100%", padding: "8px" }}
+            />
+          </div>
+
+          <button type="submit">Add Rubric Criterion</button>
+        </form>
+      )}
+    </section>
   )
 }

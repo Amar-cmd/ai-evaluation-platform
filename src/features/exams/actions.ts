@@ -142,3 +142,79 @@ export async function createQuestion(formData: FormData) {
 
   redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
 }
+
+// ======================
+// CREATE RUBRIC
+// ======================
+export async function createRubric(formData: FormData) {
+  const examId = String(formData.get("examId") || "")
+  const questionId = String(formData.get("questionId") || "")
+  const criterionName = String(formData.get("criterionName") || "").trim()
+  const criterionDescription = String(
+    formData.get("criterionDescription") || ""
+  ).trim()
+  const maxMarksValue = String(formData.get("maxMarks") || "0").trim()
+
+  if (!examId) {
+    throw new Error("Exam ID is required.")
+  }
+
+  if (!questionId) {
+    throw new Error("Question ID is required.")
+  }
+
+  if (!criterionName) {
+    throw new Error("Criterion name is required.")
+  }
+
+  const maxMarks = Number(maxMarksValue)
+
+  if (Number.isNaN(maxMarks) || maxMarks < 0) {
+    throw new Error("Max marks must be a valid non-negative number.")
+  }
+
+  await requireRole(["professor"])
+
+  const supabase = await createClient()
+
+  const { data: question, error: questionError } = await supabase
+    .from("questions")
+    .select("id, exam_id")
+    .eq("id", questionId)
+    .single()
+
+  if (questionError || !question) {
+    throw new Error("Question not found or you do not have access to it.")
+  }
+
+  if (question.exam_id !== examId) {
+    throw new Error("Question does not belong to this exam.")
+  }
+
+  const { count, error: countError } = await supabase
+    .from("rubrics")
+    .select("id", { count: "exact", head: true })
+    .eq("question_id", questionId)
+
+  if (countError) {
+    throw new Error(countError.message)
+  }
+
+  const nextCriterionOrder = (count || 0) + 1
+
+  const { error: insertError } = await supabase.from("rubrics").insert({
+    question_id: questionId,
+    criterion_order: nextCriterionOrder,
+    criterion_name: criterionName,
+    criterion_description: criterionDescription || null,
+    max_marks: maxMarks,
+  })
+
+  if (insertError) {
+    throw new Error(insertError.message)
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+}
