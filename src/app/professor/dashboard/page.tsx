@@ -1,5 +1,7 @@
+import Link from "next/link"
 import { requireProfessorOrAdmin } from "@/lib/auth"
 import { LogoutButton } from "@/components/logout-button"
+import { ROUTES } from "@/lib/routes"
 
 export default async function ProfessorDashboardPage() {
   const { profile } = await requireProfessorOrAdmin()
@@ -17,7 +19,17 @@ export default async function ProfessorDashboardPage() {
       </p>
 
       <section style={{ marginTop: "32px" }}>
-        <h2>Coming Next</h2>
+        <h2>Exam Workflow</h2>
+
+        <p>
+          <Link href={ROUTES.PROFESSOR.EXAMS}>View My Exams</Link>
+        </p>
+
+        {profile.role === "professor" && (
+          <p>
+            <Link href={ROUTES.PROFESSOR.NEW_EXAM}>Create New Exam</Link>
+          </p>
+        )}
 
         <ol>
           <li>Create exam session</li>
