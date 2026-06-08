@@ -11,6 +11,18 @@ export default function HomePage() {
       </p>
 
       <section style={{ marginTop: "32px" }}>
+        <h2>Start</h2>
+
+        <p>
+          <a href={ROUTES.AUTH.LOGIN}>Login</a>
+        </p>
+
+        <p>
+          <a href={ROUTES.AUTH.SIGNUP}>Signup</a>
+        </p>
+      </section>
+
+      <section style={{ marginTop: "32px" }}>
         <h2>Core Workflow</h2>
 
         <ol>
@@ -25,17 +37,6 @@ export default function HomePage() {
           <li>Published results become visible to students.</li>
           <li>Students can raise flags or objections.</li>
         </ol>
-      </section>
-
-      <section style={{ marginTop: "32px" }}>
-        <h2>Planned Entry Points</h2>
-
-        <ul>
-          <li>Professor Login: {ROUTES.AUTH.LOGIN}</li>
-          <li>Professor Dashboard: {ROUTES.PROFESSOR.DASHBOARD}</li>
-          <li>Student Dashboard: {ROUTES.STUDENT.DASHBOARD}</li>
-          <li>Admin Dashboard: {ROUTES.ADMIN.DASHBOARD}</li>
-        </ul>
       </section>
     </main>
   )

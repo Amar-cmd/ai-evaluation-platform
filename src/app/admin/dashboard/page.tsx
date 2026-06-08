@@ -1,0 +1,58 @@
+import { redirect } from "next/navigation"
+import { createClient } from "@/lib/supabase/server"
+import { LogoutButton } from "@/components/logout-button"
+import { ROUTES } from "@/lib/routes"
+
+export default async function AdminDashboardPage() {
+  const supabase = await createClient()
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+
+  if (userError || !user) {
+    redirect(ROUTES.AUTH.LOGIN)
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("full_name, email, role")
+    .eq("id", user.id)
+    .single()
+
+  if (profileError || !profile) {
+    throw new Error("Profile not found.")
+  }
+
+  if (profile.role !== "admin") {
+    redirect(ROUTES.STUDENT.DASHBOARD)
+  }
+
+  return (
+    <main style={{ padding: "40px" }}>
+      <h1>Admin Dashboard</h1>
+
+      <p>
+        Welcome, <strong>{profile.full_name || profile.email}</strong>
+      </p>
+
+      <p>
+        Role: <strong>{profile.role}</strong>
+      </p>
+
+      <section style={{ marginTop: "32px" }}>
+        <h2>Coming Later</h2>
+
+        <ol>
+          <li>Manage professors</li>
+          <li>Manage students</li>
+          <li>View failed AI jobs</li>
+          <li>View system logs</li>
+        </ol>
+      </section>
+
+      <LogoutButton />
+    </main>
+  )
+}
