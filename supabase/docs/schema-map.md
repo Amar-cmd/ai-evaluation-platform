@@ -13,6 +13,32 @@ This document will explain the database schema of the AI Evaluation Platform.
 7. Student results and flags
 8. Audit logs
 
-## Current Status
+## profiles
 
-Schema not created yet.
+Stores app-level identity information for each authenticated user.
+
+Relation:
+
+- `profiles.id` references `auth.users.id`
+
+Important fields:
+
+- `full_name`
+- `email`
+- `role`: admin / professor / student
+- `created_at`
+- `updated_at`
+
+Purpose:
+
+Supabase Auth identifies the user.  
+The profiles table identifies the user's application role.
+
+Default role:
+
+- `student`
+
+RLS:
+
+- Enabled
+- Policies will be added later
