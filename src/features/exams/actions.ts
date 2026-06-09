@@ -413,3 +413,143 @@ export async function uploadAnswerJson(formData: FormData) {
 
   redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
 }
+
+// ======================
+// SAVE RESPONSE COLUMN MAPPING
+// ======================
+export async function saveResponseColumnMapping(formData: FormData) {
+  const examId = String(formData.get("examId") || "")
+  const uploadId = String(formData.get("uploadId") || "")
+
+  if (!examId) {
+    throw new Error("Exam ID is required.")
+  }
+
+  if (!uploadId) {
+    throw new Error("Upload ID is required.")
+  }
+
+  const { user } = await requireRole(["professor"])
+
+  const supabase = await createClient()
+
+  const { data: exam, error: examError } = await supabase
+    .from("exams")
+    .select("id, professor_id, status")
+    .eq("id", examId)
+    .single()
+
+  if (examError || !exam) {
+    throw new Error("Exam not found or you do not have access to it.")
+  }
+
+  if (exam.professor_id !== user.id) {
+    throw new Error("You are not allowed to map answers for this exam.")
+  }
+
+  if (exam.status === "published" || exam.status === "archived") {
+    throw new Error("Cannot change mapping for published or archived exams.")
+  }
+
+  const { data: upload, error: uploadError } = await supabase
+    .from("answer_uploads")
+    .select("id, exam_id, response_columns, status")
+    .eq("id", uploadId)
+    .eq("exam_id", examId)
+    .single()
+
+  if (uploadError || !upload) {
+    throw new Error("Upload not found or you do not have access to it.")
+  }
+
+  if (upload.status === "parse_failed") {
+    throw new Error("Cannot map a failed upload. Please upload a valid file.")
+  }
+
+  const responseColumns = upload.response_columns || []
+
+  if (responseColumns.length === 0) {
+    throw new Error("No response columns were detected in this upload.")
+  }
+
+  const { data: questions, error: questionsError } = await supabase
+    .from("questions")
+    .select("id, question_no")
+    .eq("exam_id", examId)
+
+  if (questionsError) {
+    throw new Error(questionsError.message)
+  }
+
+  const validQuestionIds = new Set(questions.map((question) => question.id))
+
+  const mappingConfig: Record<string, string> = {}
+
+  for (const responseColumn of responseColumns) {
+    const selectedQuestionId = String(
+      formData.get(`map_${responseColumn}`) || ""
+    ).trim()
+
+    if (!selectedQuestionId) {
+      continue
+    }
+
+    if (!validQuestionIds.has(selectedQuestionId)) {
+      throw new Error(
+        `Invalid question selected for response column ${responseColumn}.`
+      )
+    }
+
+    mappingConfig[responseColumn] = selectedQuestionId
+  }
+
+  const mappedQuestionIds = Object.values(mappingConfig)
+  const uniqueMappedQuestionIds = new Set(mappedQuestionIds)
+
+  if (mappedQuestionIds.length === 0) {
+    throw new Error("Please map at least one response column to a question.")
+  }
+
+  if (uniqueMappedQuestionIds.size !== mappedQuestionIds.length) {
+    throw new Error(
+      "One question cannot be mapped to multiple response columns."
+    )
+  }
+
+  const { error: updateUploadError } = await supabase
+    .from("answer_uploads")
+    .update({
+      mapping_config: mappingConfig,
+      status: "mapped",
+      error_message: null,
+    })
+    .eq("id", uploadId)
+    .eq("exam_id", examId)
+
+  if (updateUploadError) {
+    throw new Error(updateUploadError.message)
+  }
+
+  const shouldMoveExamToMapped =
+    exam.status === "draft" ||
+    exam.status === "questions_added" ||
+    exam.status === "answers_uploaded"
+
+  if (shouldMoveExamToMapped) {
+    const { error: updateExamError } = await supabase
+      .from("exams")
+      .update({
+        status: "mapped",
+      })
+      .eq("id", examId)
+
+    if (updateExamError) {
+      throw new Error(updateExamError.message)
+    }
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+  revalidatePath(ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(examId, uploadId))
+
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+}

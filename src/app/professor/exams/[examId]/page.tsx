@@ -10,7 +10,7 @@ import { checkExamRubricReadiness } from "@/features/exams/readiness";
 import { requireProfessorOrAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { ROUTES } from "@/lib/routes";
-import { formatMarks } from "@/lib/marks"
+import { formatMarks } from "@/lib/marks";
 
 type ExamDetailPageProps = {
   params: Promise<{
@@ -79,16 +79,16 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
 
   const readiness = checkExamRubricReadiness(questions, rubrics || []);
 
-    const { data: answerUploads, error: answerUploadsError } = await supabase
+  const { data: answerUploads, error: answerUploadsError } = await supabase
     .from("answer_uploads")
     .select(
-      "id, file_name, file_type, total_rows, response_columns, status, error_message, created_at"
+      "id, file_name, file_type, total_rows, response_columns, mapping_config, status, error_message, created_at",
     )
     .eq("exam_id", examId)
-    .order("created_at", { ascending: false })
+    .order("created_at", { ascending: false });
 
   if (answerUploadsError) {
-    throw new Error(answerUploadsError.message)
+    throw new Error(answerUploadsError.message);
   }
 
   return (
@@ -294,7 +294,27 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
 
                 {upload.status === "mapping_pending" && (
                   <p style={{ marginTop: "12px" }}>
-                    Next: map response columns to questions.
+                    <Link
+                      href={ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(
+                        exam.id,
+                        upload.id,
+                      )}
+                    >
+                      Map response columns to questions
+                    </Link>
+                  </p>
+                )}
+
+                {upload.status === "mapped" && (
+                  <p style={{ marginTop: "12px" }}>
+                    <Link
+                      href={ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(
+                        exam.id,
+                        upload.id,
+                      )}
+                    >
+                      Edit response column mapping
+                    </Link>
                   </p>
                 )}
               </article>
@@ -302,7 +322,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
           </div>
         )}
       </section>
-      
+
       {profile.role === "professor" && (
         <section
           style={{

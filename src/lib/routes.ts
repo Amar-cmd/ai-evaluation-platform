@@ -13,6 +13,8 @@ export const ROUTES = {
     EXAM_DETAIL: (examId: string) => `/professor/exams/${examId}`,
     NEW_ANSWER_UPLOAD: (examId: string) =>
       `/professor/exams/${examId}/uploads/new`,
+    MAP_ANSWER_UPLOAD: (examId: string, uploadId: string) =>
+  `/professor/exams/${examId}/uploads/${uploadId}/map`,
   },
 
   STUDENT: {
