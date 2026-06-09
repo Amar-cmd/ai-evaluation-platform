@@ -91,6 +91,33 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
     throw new Error(answerUploadsError.message);
   }
 
+  const uploadIds = answerUploads.map((upload) => upload.id);
+
+  const { data: uploadRows, error: uploadRowsError } =
+    uploadIds.length > 0
+      ? await supabase
+          .from("answer_upload_rows")
+          .select("upload_id")
+          .in("upload_id", uploadIds)
+      : { data: [], error: null };
+
+  if (uploadRowsError) {
+    throw new Error(uploadRowsError.message);
+  }
+
+  const uploadRowCounts = new Map<string, number>();
+
+  for (const upload of answerUploads) {
+    uploadRowCounts.set(upload.id, 0);
+  }
+
+  for (const row of uploadRows || []) {
+    uploadRowCounts.set(
+      row.upload_id,
+      (uploadRowCounts.get(row.upload_id) || 0) + 1,
+    );
+  }
+
   return (
     <main style={{ padding: "40px", maxWidth: "1000px" }}>
       <p>
@@ -265,6 +292,11 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
 
                 <p>
                   <strong>Total Rows:</strong> {upload.total_rows}
+                </p>
+
+                <p>
+                  <strong>Staged Rows:</strong>{" "}
+                  {uploadRowCounts.get(upload.id) || 0}
                 </p>
 
                 <p>

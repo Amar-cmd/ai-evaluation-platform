@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { ROUTES } from "@/lib/routes";
 import { checkExamRubricReadiness } from "@/features/exams/readiness";
 import { parseMarksInput } from "@/lib/marks";
-import { parseAnswerJsonText } from "@/features/uploads/parser"
+import { parseAnswerJsonText } from "@/features/uploads/parser";
 
 export async function createExam(formData: FormData) {
   const title = String(formData.get("title") || "").trim();
@@ -292,108 +292,134 @@ export async function markExamRubricReady(formData: FormData) {
 // UPLOAD ANSWER JSON
 // ======================
 export async function uploadAnswerJson(formData: FormData) {
-  const examId = String(formData.get("examId") || "")
-  const file = formData.get("answerFile")
+  const examId = String(formData.get("examId") || "");
+  const file = formData.get("answerFile");
 
   if (!examId) {
-    throw new Error("Exam ID is required.")
+    throw new Error("Exam ID is required.");
   }
 
   if (!(file instanceof File) || file.size === 0) {
-    throw new Error("Please upload a valid JSON file.")
+    throw new Error("Please upload a valid JSON file.");
   }
 
-  const fileName = file.name
-  const lowerFileName = fileName.toLowerCase()
+  const fileName = file.name;
+  const lowerFileName = fileName.toLowerCase();
 
   if (!lowerFileName.endsWith(".json")) {
-    throw new Error("Only JSON files are supported in this step.")
+    throw new Error("Only JSON files are supported in this step.");
   }
 
-  const maxFileSize = 5 * 1024 * 1024
+  const maxFileSize = 5 * 1024 * 1024;
 
   if (file.size > maxFileSize) {
-    throw new Error("File size must be less than 5 MB.")
+    throw new Error("File size must be less than 5 MB.");
   }
 
-  const { user } = await requireRole(["professor"])
+  const { user } = await requireRole(["professor"]);
 
-  const supabase = await createClient()
+  const supabase = await createClient();
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
     .select("id, professor_id, status")
     .eq("id", examId)
-    .single()
+    .single();
 
   if (examError || !exam) {
-    throw new Error("Exam not found or you do not have access to it.")
+    throw new Error("Exam not found or you do not have access to it.");
   }
 
   if (exam.professor_id !== user.id) {
-    throw new Error("You are not allowed to upload answers for this exam.")
+    throw new Error("You are not allowed to upload answers for this exam.");
   }
 
   if (exam.status === "published" || exam.status === "archived") {
-    throw new Error("Cannot upload answers for published or archived exams.")
+    throw new Error("Cannot upload answers for published or archived exams.");
   }
 
   const { count: questionCount, error: questionCountError } = await supabase
     .from("questions")
     .select("id", { count: "exact", head: true })
-    .eq("exam_id", examId)
+    .eq("exam_id", examId);
 
   if (questionCountError) {
-    throw new Error(questionCountError.message)
+    throw new Error(questionCountError.message);
   }
 
   if (!questionCount || questionCount === 0) {
-    throw new Error("Please add questions before uploading student answers.")
+    throw new Error("Please add questions before uploading student answers.");
   }
 
-  const jsonText = await file.text()
+  const jsonText = await file.text();
 
-  let parsedUpload: ReturnType<typeof parseAnswerJsonText> | null = null
-  let parseErrorMessage: string | null = null
+  let parsedUpload: ReturnType<typeof parseAnswerJsonText> | null = null;
+  let parseErrorMessage: string | null = null;
 
   try {
-    parsedUpload = parseAnswerJsonText(jsonText)
+    parsedUpload = parseAnswerJsonText(jsonText);
   } catch (error) {
     parseErrorMessage =
-      error instanceof Error ? error.message : "Failed to parse JSON file."
+      error instanceof Error ? error.message : "Failed to parse JSON file.";
   }
 
   const parserIssueMessage =
     parsedUpload && parsedUpload.issues.length > 0
       ? parsedUpload.issues.map((issue) => issue.message).join("\n")
-      : null
+      : null;
 
   const uploadStatus =
     parsedUpload && parsedUpload.isValidForImport
       ? "mapping_pending"
-      : "parse_failed"
+      : "parse_failed";
 
-  const { error: uploadError } = await supabase.from("answer_uploads").insert({
-    exam_id: examId,
-    uploaded_by: user.id,
-    file_name: fileName,
-    file_type: "json",
-    total_rows: parsedUpload?.totalRows || 0,
-    detected_columns: parsedUpload?.detectedColumns || [],
-    response_columns: parsedUpload?.responseColumns || [],
-    raw_preview: parsedUpload?.previewRows || [],
-    mapping_config: {},
-    status: uploadStatus,
-    error_message: parseErrorMessage || parserIssueMessage,
-  })
+  const { data: createdUpload, error: uploadError } = await supabase
+    .from("answer_uploads")
+    .insert({
+      exam_id: examId,
+      uploaded_by: user.id,
+      file_name: fileName,
+      file_type: "json",
+      total_rows: parsedUpload?.totalRows || 0,
+      detected_columns: parsedUpload?.detectedColumns || [],
+      response_columns: parsedUpload?.responseColumns || [],
+      raw_preview: parsedUpload?.previewRows || [],
+      mapping_config: {},
+      status: uploadStatus,
+      error_message: parseErrorMessage || parserIssueMessage,
+    })
+    .select("id")
+    .single();
 
-  if (uploadError) {
-    throw new Error(uploadError.message)
+  if (uploadError || !createdUpload) {
+    throw new Error(uploadError?.message || "Failed to create upload record.");
   }
+
+  if (parsedUpload && parsedUpload.studentRows.length > 0) {
+  const uploadRowsToInsert = parsedUpload.studentRows.map((studentRow) => ({
+    exam_id: examId,
+    upload_id: createdUpload.id,
+    source_row_index: studentRow.sourceRowIndex,
+    first_name: studentRow.firstName,
+    last_name: studentRow.lastName,
+    id_number: studentRow.idNumber,
+    email: studentRow.email,
+    raw_row: studentRow.rawRow,
+    parsed_answers: studentRow.answers,
+  }))
+
+  const { error: uploadRowsError } = await supabase
+    .from("answer_upload_rows")
+    .insert(uploadRowsToInsert)
+
+  if (uploadRowsError) {
+    throw new Error(uploadRowsError.message)
+  }
+}
 
   if (uploadStatus === "mapping_pending") {
     const shouldMoveToAnswersUploaded =
-      exam.status === "draft" || exam.status === "questions_added"
+      exam.status === "draft" || exam.status === "questions_added";
 
     if (shouldMoveToAnswersUploaded) {
       const { error: updateExamError } = await supabase
@@ -401,54 +427,54 @@ export async function uploadAnswerJson(formData: FormData) {
         .update({
           status: "answers_uploaded",
         })
-        .eq("id", examId)
+        .eq("id", examId);
 
       if (updateExamError) {
-        throw new Error(updateExamError.message)
+        throw new Error(updateExamError.message);
       }
     }
   }
 
-  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 
-  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 }
 
 // ======================
 // SAVE RESPONSE COLUMN MAPPING
 // ======================
 export async function saveResponseColumnMapping(formData: FormData) {
-  const examId = String(formData.get("examId") || "")
-  const uploadId = String(formData.get("uploadId") || "")
+  const examId = String(formData.get("examId") || "");
+  const uploadId = String(formData.get("uploadId") || "");
 
   if (!examId) {
-    throw new Error("Exam ID is required.")
+    throw new Error("Exam ID is required.");
   }
 
   if (!uploadId) {
-    throw new Error("Upload ID is required.")
+    throw new Error("Upload ID is required.");
   }
 
-  const { user } = await requireRole(["professor"])
+  const { user } = await requireRole(["professor"]);
 
-  const supabase = await createClient()
+  const supabase = await createClient();
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
     .select("id, professor_id, status")
     .eq("id", examId)
-    .single()
+    .single();
 
   if (examError || !exam) {
-    throw new Error("Exam not found or you do not have access to it.")
+    throw new Error("Exam not found or you do not have access to it.");
   }
 
   if (exam.professor_id !== user.id) {
-    throw new Error("You are not allowed to map answers for this exam.")
+    throw new Error("You are not allowed to map answers for this exam.");
   }
 
   if (exam.status === "published" || exam.status === "archived") {
-    throw new Error("Cannot change mapping for published or archived exams.")
+    throw new Error("Cannot change mapping for published or archived exams.");
   }
 
   const { data: upload, error: uploadError } = await supabase
@@ -456,64 +482,64 @@ export async function saveResponseColumnMapping(formData: FormData) {
     .select("id, exam_id, response_columns, status")
     .eq("id", uploadId)
     .eq("exam_id", examId)
-    .single()
+    .single();
 
   if (uploadError || !upload) {
-    throw new Error("Upload not found or you do not have access to it.")
+    throw new Error("Upload not found or you do not have access to it.");
   }
 
   if (upload.status === "parse_failed") {
-    throw new Error("Cannot map a failed upload. Please upload a valid file.")
+    throw new Error("Cannot map a failed upload. Please upload a valid file.");
   }
 
-  const responseColumns = upload.response_columns || []
+  const responseColumns = upload.response_columns || [];
 
   if (responseColumns.length === 0) {
-    throw new Error("No response columns were detected in this upload.")
+    throw new Error("No response columns were detected in this upload.");
   }
 
   const { data: questions, error: questionsError } = await supabase
     .from("questions")
     .select("id, question_no")
-    .eq("exam_id", examId)
+    .eq("exam_id", examId);
 
   if (questionsError) {
-    throw new Error(questionsError.message)
+    throw new Error(questionsError.message);
   }
 
-  const validQuestionIds = new Set(questions.map((question) => question.id))
+  const validQuestionIds = new Set(questions.map((question) => question.id));
 
-  const mappingConfig: Record<string, string> = {}
+  const mappingConfig: Record<string, string> = {};
 
   for (const responseColumn of responseColumns) {
     const selectedQuestionId = String(
-      formData.get(`map_${responseColumn}`) || ""
-    ).trim()
+      formData.get(`map_${responseColumn}`) || "",
+    ).trim();
 
     if (!selectedQuestionId) {
-      continue
+      continue;
     }
 
     if (!validQuestionIds.has(selectedQuestionId)) {
       throw new Error(
-        `Invalid question selected for response column ${responseColumn}.`
-      )
+        `Invalid question selected for response column ${responseColumn}.`,
+      );
     }
 
-    mappingConfig[responseColumn] = selectedQuestionId
+    mappingConfig[responseColumn] = selectedQuestionId;
   }
 
-  const mappedQuestionIds = Object.values(mappingConfig)
-  const uniqueMappedQuestionIds = new Set(mappedQuestionIds)
+  const mappedQuestionIds = Object.values(mappingConfig);
+  const uniqueMappedQuestionIds = new Set(mappedQuestionIds);
 
   if (mappedQuestionIds.length === 0) {
-    throw new Error("Please map at least one response column to a question.")
+    throw new Error("Please map at least one response column to a question.");
   }
 
   if (uniqueMappedQuestionIds.size !== mappedQuestionIds.length) {
     throw new Error(
-      "One question cannot be mapped to multiple response columns."
-    )
+      "One question cannot be mapped to multiple response columns.",
+    );
   }
 
   const { error: updateUploadError } = await supabase
@@ -524,16 +550,16 @@ export async function saveResponseColumnMapping(formData: FormData) {
       error_message: null,
     })
     .eq("id", uploadId)
-    .eq("exam_id", examId)
+    .eq("exam_id", examId);
 
   if (updateUploadError) {
-    throw new Error(updateUploadError.message)
+    throw new Error(updateUploadError.message);
   }
 
   const shouldMoveExamToMapped =
     exam.status === "draft" ||
     exam.status === "questions_added" ||
-    exam.status === "answers_uploaded"
+    exam.status === "answers_uploaded";
 
   if (shouldMoveExamToMapped) {
     const { error: updateExamError } = await supabase
@@ -541,15 +567,19 @@ export async function saveResponseColumnMapping(formData: FormData) {
       .update({
         status: "mapped",
       })
-      .eq("id", examId)
+      .eq("id", examId);
 
     if (updateExamError) {
-      throw new Error(updateExamError.message)
+      throw new Error(updateExamError.message);
     }
   }
 
-  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
-  revalidatePath(ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(examId, uploadId))
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+  revalidatePath(ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(examId, uploadId));
 
-  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 }
+
+// ======================
+//
+// ======================
