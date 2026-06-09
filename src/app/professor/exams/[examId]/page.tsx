@@ -6,6 +6,7 @@ import {
   markExamRubricReady,
   importMappedAnswers,
   createEvaluationJobAndSeedPending,
+  runMockAiEvaluationForExam,
 } from "@/features/exams/actions";
 
 import { checkExamRubricReadiness } from "@/features/exams/readiness";
@@ -138,6 +139,27 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
   if (evaluationCountError) {
     throw new Error(evaluationCountError.message);
   }
+
+  const { data: evaluationStatusRows, error: evaluationStatusRowsError } =
+    await supabase.from("evaluations").select("status").eq("exam_id", examId);
+
+  if (evaluationStatusRowsError) {
+    throw new Error(evaluationStatusRowsError.message);
+  }
+
+  const evaluationStatusCounts = new Map<string, number>();
+
+  for (const row of evaluationStatusRows || []) {
+    evaluationStatusCounts.set(
+      row.status,
+      (evaluationStatusCounts.get(row.status) || 0) + 1,
+    );
+  }
+
+  const pendingEvaluationCount = evaluationStatusCounts.get("pending") || 0;
+
+  const professorReviewPendingCount =
+    evaluationStatusCounts.get("professor_review_pending") || 0;
 
   const { data: evaluationJobs, error: evaluationJobsError } = await supabase
     .from("evaluation_jobs")
@@ -427,6 +449,15 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
           <strong>Evaluation Records:</strong> {evaluationCount || 0}
         </p>
 
+        <p>
+          <strong>Pending AI Evaluation:</strong> {pendingEvaluationCount}
+        </p>
+
+        <p>
+          <strong>Professor Review Pending:</strong>{" "}
+          {professorReviewPendingCount}
+        </p>
+
         {!readiness.isReady && (
           <p style={{ color: "crimson" }}>
             Complete rubric readiness before creating evaluation records.
@@ -457,6 +488,17 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
             </p>
           )}
 
+        {profile.role === "professor" &&
+          pendingEvaluationCount > 0 && (
+            <form action={runMockAiEvaluationForExam}>
+              <input type="hidden" name="examId" value={exam.id} />
+
+              <button type="submit">
+                Run Mock AI Evaluation
+              </button>
+            </form>
+          )}
+          
         {evaluationJobs.length > 0 && (
           <div style={{ marginTop: "24px" }}>
             <h3>Evaluation Jobs</h3>
