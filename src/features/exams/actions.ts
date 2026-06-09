@@ -396,26 +396,26 @@ export async function uploadAnswerJson(formData: FormData) {
   }
 
   if (parsedUpload && parsedUpload.studentRows.length > 0) {
-  const uploadRowsToInsert = parsedUpload.studentRows.map((studentRow) => ({
-    exam_id: examId,
-    upload_id: createdUpload.id,
-    source_row_index: studentRow.sourceRowIndex,
-    first_name: studentRow.firstName,
-    last_name: studentRow.lastName,
-    id_number: studentRow.idNumber,
-    email: studentRow.email,
-    raw_row: studentRow.rawRow,
-    parsed_answers: studentRow.answers,
-  }))
+    const uploadRowsToInsert = parsedUpload.studentRows.map((studentRow) => ({
+      exam_id: examId,
+      upload_id: createdUpload.id,
+      source_row_index: studentRow.sourceRowIndex,
+      first_name: studentRow.firstName,
+      last_name: studentRow.lastName,
+      id_number: studentRow.idNumber,
+      email: studentRow.email,
+      raw_row: studentRow.rawRow,
+      parsed_answers: studentRow.answers,
+    }));
 
-  const { error: uploadRowsError } = await supabase
-    .from("answer_upload_rows")
-    .insert(uploadRowsToInsert)
+    const { error: uploadRowsError } = await supabase
+      .from("answer_upload_rows")
+      .insert(uploadRowsToInsert);
 
-  if (uploadRowsError) {
-    throw new Error(uploadRowsError.message)
+    if (uploadRowsError) {
+      throw new Error(uploadRowsError.message);
+    }
   }
-}
 
   if (uploadStatus === "mapping_pending") {
     const shouldMoveToAnswersUploaded =
@@ -492,7 +492,15 @@ export async function saveResponseColumnMapping(formData: FormData) {
     throw new Error("Cannot map a failed upload. Please upload a valid file.");
   }
 
-  const responseColumns = upload.response_columns || [];
+  if (upload.status === "imported") {
+    throw new Error(
+      "This upload has already been imported. Mapping cannot be changed now.",
+    );
+  }
+
+  const responseColumns: string[] = Array.isArray(upload.response_columns)
+    ? (upload.response_columns as string[])
+    : [];
 
   if (responseColumns.length === 0) {
     throw new Error("No response columns were detected in this upload.");
@@ -580,6 +588,360 @@ export async function saveResponseColumnMapping(formData: FormData) {
   redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 }
 
-// ======================
-//
-// ======================
+// ---
+export async function importMappedAnswers(formData: FormData) {
+  const examId = String(formData.get("examId") || "");
+  const uploadId = String(formData.get("uploadId") || "");
+
+  if (!examId) {
+    throw new Error("Exam ID is required.");
+  }
+
+  if (!uploadId) {
+    throw new Error("Upload ID is required.");
+  }
+
+  const { user } = await requireRole(["professor"]);
+
+  const supabase = await createClient();
+
+  const { data: exam, error: examError } = await supabase
+    .from("exams")
+    .select("id, professor_id, status")
+    .eq("id", examId)
+    .single();
+
+  if (examError || !exam) {
+    throw new Error("Exam not found or you do not have access to it.");
+  }
+
+  if (exam.professor_id !== user.id) {
+    throw new Error("You are not allowed to import answers for this exam.");
+  }
+
+  if (exam.status === "published" || exam.status === "archived") {
+    throw new Error("Cannot import answers for published or archived exams.");
+  }
+
+  const { data: upload, error: uploadError } = await supabase
+    .from("answer_uploads")
+    .select("id, exam_id, response_columns, mapping_config, status")
+    .eq("id", uploadId)
+    .eq("exam_id", examId)
+    .single();
+
+  if (uploadError || !upload) {
+    throw new Error("Upload not found or you do not have access to it.");
+  }
+
+  if (upload.status === "parse_failed") {
+    throw new Error("Cannot import a failed upload.");
+  }
+
+  if (upload.status === "mapping_pending") {
+    throw new Error("Please map response columns before importing.");
+  }
+
+  if (upload.status === "imported") {
+    throw new Error("This upload has already been imported.");
+  }
+
+  if (upload.status !== "mapped") {
+    throw new Error("Only mapped uploads can be imported.");
+  }
+
+  const mappingConfig = readMappingConfig(upload.mapping_config);
+  const mappingEntries = Object.entries(mappingConfig);
+
+  if (mappingEntries.length === 0) {
+    throw new Error("No response column mapping found.");
+  }
+
+  const responseColumns: string[] = Array.isArray(upload.response_columns)
+    ? (upload.response_columns as string[])
+    : [];
+
+  for (const [responseColumn] of mappingEntries) {
+    if (!responseColumns.includes(responseColumn)) {
+      throw new Error(
+        `Mapped response column ${responseColumn} was not found in the upload.`,
+      );
+    }
+  }
+
+  const { data: questions, error: questionsError } = await supabase
+    .from("questions")
+    .select("id")
+    .eq("exam_id", examId);
+
+  if (questionsError) {
+    throw new Error(questionsError.message);
+  }
+
+  const validQuestionIds = new Set(questions.map((question) => question.id));
+
+  for (const [, questionId] of mappingEntries) {
+    if (!validQuestionIds.has(questionId)) {
+      throw new Error(
+        "Mapping contains a question that does not belong to this exam.",
+      );
+    }
+  }
+
+  const { count: existingImportedStudentsCount, error: existingCountError } =
+    await supabase
+      .from("exam_students")
+      .select("id", { count: "exact", head: true })
+      .eq("upload_id", uploadId);
+
+  if (existingCountError) {
+    throw new Error(existingCountError.message);
+  }
+
+  if (existingImportedStudentsCount && existingImportedStudentsCount > 0) {
+    throw new Error(
+      "This upload already has imported students. Re-import is not allowed yet.",
+    );
+  }
+
+  const { data: uploadRows, error: uploadRowsError } = await supabase
+    .from("answer_upload_rows")
+    .select(
+      "id, exam_id, upload_id, source_row_index, first_name, last_name, id_number, email, raw_row, parsed_answers",
+    )
+    .eq("upload_id", uploadId)
+    .eq("exam_id", examId)
+    .order("source_row_index", { ascending: true });
+
+  if (uploadRowsError) {
+    throw new Error(uploadRowsError.message);
+  }
+
+  const stagingRows = (uploadRows || []) as UploadRowForImport[];
+
+  if (stagingRows.length === 0) {
+    throw new Error(
+      "No staged rows found for this upload. Please re-upload the JSON file.",
+    );
+  }
+
+  const rowWithMissingEmail = stagingRows.find(
+    (row) => !row.email || !row.email.trim(),
+  );
+
+  if (rowWithMissingEmail) {
+    throw new Error(
+      `Row ${
+        rowWithMissingEmail.source_row_index + 1
+      } has missing email. Cannot import.`,
+    );
+  }
+
+  const examStudentsToInsert = stagingRows.map((row) => ({
+    exam_id: examId,
+    upload_id: uploadId,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    id_number: row.id_number,
+    email: row.email!.trim().toLowerCase(),
+    source_row_index: row.source_row_index,
+    raw_row: row.raw_row || {},
+  }));
+
+  const { data: createdExamStudents, error: examStudentsInsertError } =
+    await supabase
+      .from("exam_students")
+      .insert(examStudentsToInsert)
+      .select("id, source_row_index");
+
+  if (examStudentsInsertError || !createdExamStudents) {
+    throw new Error(
+      examStudentsInsertError?.message || "Failed to import students.",
+    );
+  }
+
+  const examStudentIdByRowIndex = new Map<number, string>();
+
+  for (const student of createdExamStudents) {
+    examStudentIdByRowIndex.set(student.source_row_index, student.id);
+  }
+
+  const studentAnswersToInsert: {
+    exam_id: string;
+    exam_student_id: string;
+    question_id: string;
+    response_column: string;
+    answer_text: string;
+    raw_answer: unknown;
+    word_count: number;
+    character_count: number;
+  }[] = [];
+
+  for (const row of stagingRows) {
+    const examStudentId = examStudentIdByRowIndex.get(row.source_row_index);
+
+    if (!examStudentId) {
+      throw new Error(
+        `Could not find imported student for row ${row.source_row_index + 1}.`,
+      );
+    }
+
+    const parsedAnswers = readParsedAnswers(row.parsed_answers);
+
+    for (const [responseColumn, questionId] of mappingEntries) {
+      const parsedAnswer = parsedAnswers.find(
+        (answer) => answer.responseColumn === responseColumn,
+      );
+
+      const answerText = parsedAnswer?.answerText || "";
+
+      studentAnswersToInsert.push({
+        exam_id: examId,
+        exam_student_id: examStudentId,
+        question_id: questionId,
+        response_column: responseColumn,
+        answer_text: answerText,
+        raw_answer: parsedAnswer?.rawAnswer ?? null,
+        word_count: parsedAnswer?.wordCount ?? countWords(answerText),
+        character_count: parsedAnswer?.characterCount ?? answerText.length,
+      });
+    }
+  }
+
+  if (studentAnswersToInsert.length === 0) {
+    throw new Error("No student answers were created from the mapping.");
+  }
+
+  const answerChunks = chunkArray(studentAnswersToInsert, 500);
+
+  for (const chunk of answerChunks) {
+    const { error: answersInsertError } = await supabase
+      .from("student_answers")
+      .insert(chunk);
+
+    if (answersInsertError) {
+      throw new Error(answersInsertError.message);
+    }
+  }
+
+  const { error: updateUploadError } = await supabase
+    .from("answer_uploads")
+    .update({
+      status: "imported",
+      error_message: null,
+    })
+    .eq("id", uploadId)
+    .eq("exam_id", examId);
+
+  if (updateUploadError) {
+    throw new Error(updateUploadError.message);
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+  revalidatePath(ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(examId, uploadId));
+
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+}
+
+type MappingConfig = Record<string, string>;
+
+type ParsedAnswerFromStaging = {
+  responseColumn: string;
+  answerText: string;
+  rawAnswer: unknown;
+  wordCount: number;
+  characterCount: number;
+};
+
+type UploadRowForImport = {
+  id: string;
+  exam_id: string;
+  upload_id: string;
+  source_row_index: number;
+  first_name: string | null;
+  last_name: string | null;
+  id_number: string | null;
+  email: string | null;
+  raw_row: unknown;
+  parsed_answers: unknown;
+};
+
+function readMappingConfig(value: unknown): MappingConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const mappingConfig: MappingConfig = {};
+
+  for (const [key, mappedValue] of Object.entries(value)) {
+    if (typeof mappedValue === "string" && mappedValue.trim()) {
+      mappingConfig[key] = mappedValue;
+    }
+  }
+
+  return mappingConfig;
+}
+
+function readParsedAnswers(value: unknown): ParsedAnswerFromStaging[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const parsedAnswers: ParsedAnswerFromStaging[] = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+
+    const record = item as Record<string, unknown>;
+
+    const responseColumn =
+      typeof record.responseColumn === "string" ? record.responseColumn : "";
+
+    if (!responseColumn) {
+      continue;
+    }
+
+    const answerText =
+      typeof record.answerText === "string" ? record.answerText : "";
+
+    const wordCount =
+      typeof record.wordCount === "number"
+        ? record.wordCount
+        : countWords(answerText);
+
+    const characterCount =
+      typeof record.characterCount === "number"
+        ? record.characterCount
+        : answerText.length;
+
+    parsedAnswers.push({
+      responseColumn,
+      answerText,
+      rawAnswer: record.rawAnswer ?? null,
+      wordCount,
+      characterCount,
+    });
+  }
+
+  return parsedAnswers;
+}
+
+function countWords(text: string) {
+  if (!text.trim()) {
+    return 0;
+  }
+
+  return text.trim().split(/\s+/).length;
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+}

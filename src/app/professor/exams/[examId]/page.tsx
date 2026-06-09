@@ -4,6 +4,7 @@ import {
   createQuestion,
   createRubric,
   markExamRubricReady,
+  importMappedAnswers,
 } from "@/features/exams/actions";
 
 import { checkExamRubricReadiness } from "@/features/exams/readiness";
@@ -338,15 +339,36 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                 )}
 
                 {upload.status === "mapped" && (
-                  <p style={{ marginTop: "12px" }}>
-                    <Link
-                      href={ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(
-                        exam.id,
-                        upload.id,
-                      )}
-                    >
-                      Edit response column mapping
-                    </Link>
+                  <div style={{ marginTop: "12px" }}>
+                    <p>
+                      <Link
+                        href={ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(
+                          exam.id,
+                          upload.id,
+                        )}
+                      >
+                        Edit response column mapping
+                      </Link>
+                    </p>
+
+                    {profile.role === "professor" && (
+                      <form action={importMappedAnswers}>
+                        <input type="hidden" name="examId" value={exam.id} />
+                        <input
+                          type="hidden"
+                          name="uploadId"
+                          value={upload.id}
+                        />
+
+                        <button type="submit">Import Mapped Answers</button>
+                      </form>
+                    )}
+                  </div>
+                )}
+
+                {upload.status === "imported" && (
+                  <p style={{ marginTop: "12px", color: "green" }}>
+                    Answers imported successfully.
                   </p>
                 )}
               </article>
