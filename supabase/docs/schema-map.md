@@ -231,3 +231,77 @@ Student:
 
 - No direct access at this stage.
 
+## answer_uploads
+
+Stores uploaded CSV/JSON metadata and parsing/mapping state.
+
+Relation:
+
+- `answer_uploads.exam_id` references `exams.id`
+- `answer_uploads.uploaded_by` references `profiles.id`
+
+Important fields:
+
+- `file_name`
+- `file_type`
+- `storage_path`
+- `total_rows`
+- `detected_columns`
+- `response_columns`
+- `raw_preview`
+- `mapping_config`
+- `status`
+- `error_message`
+
+RLS:
+
+- Enabled
+- Policies will be added later
+
+## exam_students
+
+Stores normalized student records imported from uploaded answer file.
+
+Relation:
+
+- `exam_students.exam_id` references `exams.id`
+- `exam_students.upload_id` references `answer_uploads.id`
+- `exam_students.profile_id` optionally references `profiles.id`
+
+Important fields:
+
+- `first_name`
+- `last_name`
+- `id_number`
+- `email`
+- `source_row_index`
+- `raw_row`
+
+RLS:
+
+- Enabled
+- Policies will be added later
+
+## student_answers
+
+Stores normalized question-wise answers for imported students.
+
+Relation:
+
+- `student_answers.exam_id` references `exams.id`
+- `student_answers.exam_student_id` references `exam_students.id`
+- `student_answers.question_id` references `questions.id`
+
+Important fields:
+
+- `response_column`
+- `answer_text`
+- `raw_answer`
+- `word_count`
+- `character_count`
+
+RLS:
+
+- Enabled
+- Policies will be added later
+
