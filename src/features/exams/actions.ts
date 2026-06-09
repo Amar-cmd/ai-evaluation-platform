@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { ROUTES } from "@/lib/routes";
 import { checkExamRubricReadiness } from "@/features/exams/readiness";
 import { parseMarksInput } from "@/lib/marks";
+import { parseAnswerJsonText } from "@/features/uploads/parser"
 
 export async function createExam(formData: FormData) {
   const title = String(formData.get("title") || "").trim();
@@ -285,4 +286,130 @@ export async function markExamRubricReady(formData: FormData) {
   revalidatePath(ROUTES.PROFESSOR.EXAMS);
 
   redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+}
+
+// ======================
+// UPLOAD ANSWER JSON
+// ======================
+export async function uploadAnswerJson(formData: FormData) {
+  const examId = String(formData.get("examId") || "")
+  const file = formData.get("answerFile")
+
+  if (!examId) {
+    throw new Error("Exam ID is required.")
+  }
+
+  if (!(file instanceof File) || file.size === 0) {
+    throw new Error("Please upload a valid JSON file.")
+  }
+
+  const fileName = file.name
+  const lowerFileName = fileName.toLowerCase()
+
+  if (!lowerFileName.endsWith(".json")) {
+    throw new Error("Only JSON files are supported in this step.")
+  }
+
+  const maxFileSize = 5 * 1024 * 1024
+
+  if (file.size > maxFileSize) {
+    throw new Error("File size must be less than 5 MB.")
+  }
+
+  const { user } = await requireRole(["professor"])
+
+  const supabase = await createClient()
+
+  const { data: exam, error: examError } = await supabase
+    .from("exams")
+    .select("id, professor_id, status")
+    .eq("id", examId)
+    .single()
+
+  if (examError || !exam) {
+    throw new Error("Exam not found or you do not have access to it.")
+  }
+
+  if (exam.professor_id !== user.id) {
+    throw new Error("You are not allowed to upload answers for this exam.")
+  }
+
+  if (exam.status === "published" || exam.status === "archived") {
+    throw new Error("Cannot upload answers for published or archived exams.")
+  }
+
+  const { count: questionCount, error: questionCountError } = await supabase
+    .from("questions")
+    .select("id", { count: "exact", head: true })
+    .eq("exam_id", examId)
+
+  if (questionCountError) {
+    throw new Error(questionCountError.message)
+  }
+
+  if (!questionCount || questionCount === 0) {
+    throw new Error("Please add questions before uploading student answers.")
+  }
+
+  const jsonText = await file.text()
+
+  let parsedUpload: ReturnType<typeof parseAnswerJsonText> | null = null
+  let parseErrorMessage: string | null = null
+
+  try {
+    parsedUpload = parseAnswerJsonText(jsonText)
+  } catch (error) {
+    parseErrorMessage =
+      error instanceof Error ? error.message : "Failed to parse JSON file."
+  }
+
+  const parserIssueMessage =
+    parsedUpload && parsedUpload.issues.length > 0
+      ? parsedUpload.issues.map((issue) => issue.message).join("\n")
+      : null
+
+  const uploadStatus =
+    parsedUpload && parsedUpload.isValidForImport
+      ? "mapping_pending"
+      : "parse_failed"
+
+  const { error: uploadError } = await supabase.from("answer_uploads").insert({
+    exam_id: examId,
+    uploaded_by: user.id,
+    file_name: fileName,
+    file_type: "json",
+    total_rows: parsedUpload?.totalRows || 0,
+    detected_columns: parsedUpload?.detectedColumns || [],
+    response_columns: parsedUpload?.responseColumns || [],
+    raw_preview: parsedUpload?.previewRows || [],
+    mapping_config: {},
+    status: uploadStatus,
+    error_message: parseErrorMessage || parserIssueMessage,
+  })
+
+  if (uploadError) {
+    throw new Error(uploadError.message)
+  }
+
+  if (uploadStatus === "mapping_pending") {
+    const shouldMoveToAnswersUploaded =
+      exam.status === "draft" || exam.status === "questions_added"
+
+    if (shouldMoveToAnswersUploaded) {
+      const { error: updateExamError } = await supabase
+        .from("exams")
+        .update({
+          status: "answers_uploaded",
+        })
+        .eq("id", examId)
+
+      if (updateExamError) {
+        throw new Error(updateExamError.message)
+      }
+    }
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
 }

@@ -79,6 +79,18 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
 
   const readiness = checkExamRubricReadiness(questions, rubrics || []);
 
+    const { data: answerUploads, error: answerUploadsError } = await supabase
+    .from("answer_uploads")
+    .select(
+      "id, file_name, file_type, total_rows, response_columns, status, error_message, created_at"
+    )
+    .eq("exam_id", examId)
+    .order("created_at", { ascending: false })
+
+  if (answerUploadsError) {
+    throw new Error(answerUploadsError.message)
+  }
+
   return (
     <main style={{ padding: "40px", maxWidth: "1000px" }}>
       <p>
@@ -210,6 +222,87 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
         )}
       </section>
 
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "8px",
+          padding: "16px",
+          marginBottom: "32px",
+        }}
+      >
+        <h2>Answer Uploads</h2>
+
+        {profile.role === "professor" && (
+          <p>
+            <Link href={ROUTES.PROFESSOR.NEW_ANSWER_UPLOAD(exam.id)}>
+              Upload Student Answers JSON
+            </Link>
+          </p>
+        )}
+
+        {answerUploads.length === 0 ? (
+          <p>No answer files uploaded yet.</p>
+        ) : (
+          <div style={{ display: "grid", gap: "12px" }}>
+            {answerUploads.map((upload) => (
+              <article
+                key={upload.id}
+                style={{
+                  border: "1px solid #eee",
+                  borderRadius: "6px",
+                  padding: "12px",
+                }}
+              >
+                <h3>{upload.file_name}</h3>
+
+                <p>
+                  <strong>Type:</strong> {upload.file_type}
+                </p>
+
+                <p>
+                  <strong>Status:</strong> {upload.status}
+                </p>
+
+                <p>
+                  <strong>Total Rows:</strong> {upload.total_rows}
+                </p>
+
+                <p>
+                  <strong>Detected Response Columns:</strong>{" "}
+                  {upload.response_columns.length > 0
+                    ? upload.response_columns.join(", ")
+                    : "None"}
+                </p>
+
+                <p>
+                  <strong>Uploaded:</strong>{" "}
+                  {new Date(upload.created_at).toLocaleString()}
+                </p>
+
+                {upload.error_message && (
+                  <pre
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      background: "#f8f8f8",
+                      padding: "8px",
+                      borderRadius: "4px",
+                    }}
+                  >
+                    {upload.error_message}
+                  </pre>
+                )}
+
+                {upload.status === "mapping_pending" && (
+                  <p style={{ marginTop: "12px" }}>
+                    Next: map response columns to questions.
+                  </p>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+      
       {profile.role === "professor" && (
         <section
           style={{

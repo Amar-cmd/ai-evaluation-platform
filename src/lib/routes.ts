@@ -11,7 +11,8 @@ export const ROUTES = {
     EXAMS: "/professor/exams",
     NEW_EXAM: "/professor/exams/new",
     EXAM_DETAIL: (examId: string) => `/professor/exams/${examId}`,
-
+    NEW_ANSWER_UPLOAD: (examId: string) =>
+      `/professor/exams/${examId}/uploads/new`,
   },
 
   STUDENT: {
@@ -22,4 +23,4 @@ export const ROUTES = {
   ADMIN: {
     DASHBOARD: "/admin/dashboard",
   },
-} as const
+} as const;
