@@ -1,9 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { createQuestion, createRubric } from "@/features/exams/actions";
+import {
+  createQuestion,
+  createRubric,
+  markExamRubricReady,
+} from "@/features/exams/actions";
+
+import { checkExamRubricReadiness } from "@/features/exams/readiness";
 import { requireProfessorOrAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { ROUTES } from "@/lib/routes";
+import { formatMarks } from "@/lib/marks"
 
 type ExamDetailPageProps = {
   params: Promise<{
@@ -70,6 +77,8 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
     rubricsByQuestion.set(rubric.question_id, [...existing, rubric]);
   }
 
+  const readiness = checkExamRubricReadiness(questions, rubrics || []);
+
   return (
     <main style={{ padding: "40px", maxWidth: "1000px" }}>
       <p>
@@ -105,12 +114,100 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
         </p>
 
         <p>
-          <strong>Total Marks:</strong> {exam.total_marks}
+          <strong>Total Marks:</strong> {formatMarks(exam.total_marks)}
         </p>
 
         <p>
           <strong>Created:</strong> {new Date(exam.created_at).toLocaleString()}
         </p>
+      </section>
+
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "8px",
+          padding: "16px",
+          marginBottom: "32px",
+        }}
+      >
+        <h2>Rubric Readiness</h2>
+
+        <p>
+          <strong>Current Exam Status:</strong> {exam.status}
+        </p>
+
+        {readiness.isReady ? (
+          <p style={{ color: "green" }}>
+            All questions have approved model answers and matching rubrics.
+          </p>
+        ) : (
+          <>
+            <p style={{ color: "crimson" }}>
+              This exam is not rubric-ready yet.
+            </p>
+
+            <ul>
+              {readiness.issues.map((issue, index) => (
+                <li
+                  key={`${issue.type}-${issue.questionId || "exam"}-${index}`}
+                >
+                  {issue.message}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {readiness.questionSummaries.length > 0 && (
+          <div style={{ marginTop: "16px" }}>
+            <h3>Question-wise Readiness</h3>
+
+            <div style={{ display: "grid", gap: "8px" }}>
+              {readiness.questionSummaries.map((summary) => (
+                <div
+                  key={summary.questionId}
+                  style={{
+                    border: "1px solid #eee",
+                    padding: "8px",
+                    borderRadius: "6px",
+                  }}
+                >
+                  <strong>Question {summary.questionNo}</strong>
+
+                  <p>
+                    Model Answer:{" "}
+                    {summary.modelAnswerReady ? "Ready" : "Not Ready"}
+                  </p>
+
+                  <p>
+                    Rubrics: {summary.rubricCount} criteria, total{" "}
+                    {summary.rubricTotal} / {summary.questionMaxMarks}
+                  </p>
+
+                  <p>
+                    Rubric Marks:{" "}
+                    {summary.rubricMarksMatch ? "Matching" : "Not Matching"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {profile.role === "professor" &&
+          readiness.isReady &&
+          exam.status !== "rubric_ready" && (
+            <form action={markExamRubricReady} style={{ marginTop: "16px" }}>
+              <input type="hidden" name="examId" value={exam.id} />
+              <button type="submit">Mark Rubric Ready</button>
+            </form>
+          )}
+
+        {exam.status === "rubric_ready" && (
+          <p style={{ color: "green", marginTop: "16px" }}>
+            This exam has been marked as rubric ready.
+          </p>
+        )}
       </section>
 
       {profile.role === "professor" && (
@@ -159,11 +256,11 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
               <br />
               <input
                 name="maxMarks"
-                type="number"
-                min="0"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
+                pattern="[0-9]+([.][0-9]{1,2})?"
                 required
-                placeholder="Example: 10"
+                placeholder="Example: 10 or 10.50"
                 style={{ width: "100%", padding: "8px" }}
               />
             </div>
@@ -204,7 +301,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
         ) : (
           <div style={{ display: "grid", gap: "16px" }}>
             {questions.map((question) => (
-                            <article
+              <article
                 key={question.id}
                 style={{
                   border: "1px solid #ddd",
@@ -221,7 +318,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                 </p>
 
                 <p>
-                  <strong>Max Marks:</strong> {question.max_marks}
+                  <strong>Max Marks:</strong> {formatMarks(question.max_marks)}
                 </p>
 
                 <p>
@@ -264,14 +361,14 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
 }
 
 type RubricRow = {
-  id: string
-  question_id: string
-  criterion_order: number
-  criterion_name: string
-  criterion_description: string | null
-  max_marks: number | string
-  created_at: string
-}
+  id: string;
+  question_id: string;
+  criterion_order: number;
+  criterion_name: string;
+  criterion_description: string | null;
+  max_marks: number | string;
+  created_at: string;
+};
 
 function RubricSection({
   examId,
@@ -280,19 +377,19 @@ function RubricSection({
   rubrics,
   canEdit,
 }: {
-  examId: string
-  questionId: string
-  questionMaxMarks: number
-  rubrics: RubricRow[]
-  canEdit: boolean
+  examId: string;
+  questionId: string;
+  questionMaxMarks: number;
+  rubrics: RubricRow[];
+  canEdit: boolean;
 }) {
   const rubricTotal = rubrics.reduce((total, rubric) => {
-    return total + Number(rubric.max_marks)
-  }, 0)
+    return total + Number(rubric.max_marks);
+  }, 0);
 
-  const isExactMatch = rubricTotal === questionMaxMarks
-  const isOverLimit = rubricTotal > questionMaxMarks
-  const isUnderLimit = rubricTotal < questionMaxMarks
+  const isExactMatch = rubricTotal === questionMaxMarks;
+  const isOverLimit = rubricTotal > questionMaxMarks;
+  const isUnderLimit = rubricTotal < questionMaxMarks;
 
   return (
     <section>
@@ -327,7 +424,7 @@ function RubricSection({
           {rubrics.map((rubric) => (
             <li key={rubric.id} style={{ marginBottom: "12px" }}>
               <strong>
-                {rubric.criterion_name} — {rubric.max_marks} marks
+                {rubric.criterion_name} — {formatMarks(rubric.max_marks)} marks
               </strong>
 
               {rubric.criterion_description && (
@@ -383,5 +480,5 @@ function RubricSection({
         </form>
       )}
     </section>
-  )
+  );
 }

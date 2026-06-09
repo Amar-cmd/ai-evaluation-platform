@@ -1,31 +1,28 @@
-"use server"
+"use server";
 
-import { revalidatePath } from "next/cache"
-import { redirect } from "next/navigation"
-import { requireRole } from "@/lib/auth"
-import { createClient } from "@/lib/supabase/server"
-import { ROUTES } from "@/lib/routes"
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { requireRole } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
+import { ROUTES } from "@/lib/routes";
+import { checkExamRubricReadiness } from "@/features/exams/readiness";
+import { parseMarksInput } from "@/lib/marks";
 
 export async function createExam(formData: FormData) {
-  const title = String(formData.get("title") || "").trim()
-  const subject = String(formData.get("subject") || "").trim()
-  const course = String(formData.get("course") || "").trim()
-  const batch = String(formData.get("batch") || "").trim()
-  const totalMarksValue = String(formData.get("totalMarks") || "0").trim()
+  const title = String(formData.get("title") || "").trim();
+  const subject = String(formData.get("subject") || "").trim();
+  const course = String(formData.get("course") || "").trim();
+  const batch = String(formData.get("batch") || "").trim();
+
+  const totalMarks = parseMarksInput(formData.get("totalMarks"), "Total marks");
 
   if (!title) {
-    throw new Error("Exam title is required.")
+    throw new Error("Exam title is required.");
   }
 
-  const totalMarks = Number(totalMarksValue)
+  const { user } = await requireRole(["professor"]);
 
-  if (Number.isNaN(totalMarks) || totalMarks < 0) {
-    throw new Error("Total marks must be a valid non-negative number.")
-  }
-
-  const { user } = await requireRole(["professor"])
-
-  const supabase = await createClient()
+  const supabase = await createClient();
 
   const { error } = await supabase.from("exams").insert({
     professor_id: user.id,
@@ -34,15 +31,15 @@ export async function createExam(formData: FormData) {
     course: course || null,
     batch: batch || null,
     total_marks: totalMarks,
-  })
+  });
 
   if (error) {
-    throw new Error(error.message)
+    throw new Error(error.message);
   }
 
-  revalidatePath(ROUTES.PROFESSOR.EXAMS)
+  revalidatePath(ROUTES.PROFESSOR.EXAMS);
 
-  redirect(ROUTES.PROFESSOR.EXAMS)
+  redirect(ROUTES.PROFESSOR.EXAMS);
 }
 
 // ======================
@@ -50,59 +47,54 @@ export async function createExam(formData: FormData) {
 // ======================
 
 export async function createQuestion(formData: FormData) {
-  const examId = String(formData.get("examId") || "")
-  const questionNo = String(formData.get("questionNo") || "").trim()
-  const questionText = String(formData.get("questionText") || "").trim()
-  const questionType = String(formData.get("questionType") || "other").trim()
-  const maxMarksValue = String(formData.get("maxMarks") || "0").trim()
-  const modelAnswer = String(formData.get("modelAnswer") || "").trim()
+  const examId = String(formData.get("examId") || "");
+  const questionNo = String(formData.get("questionNo") || "").trim();
+  const questionText = String(formData.get("questionText") || "").trim();
+  const questionType = String(formData.get("questionType") || "other").trim();
+  const modelAnswer = String(formData.get("modelAnswer") || "").trim();
+
+  const maxMarks = parseMarksInput(formData.get("maxMarks"), "Max marks");
 
   if (!examId) {
-    throw new Error("Exam ID is required.")
+    throw new Error("Exam ID is required.");
   }
 
   if (!questionNo) {
-    throw new Error("Question number is required.")
+    throw new Error("Question number is required.");
   }
 
   if (!questionText) {
-    throw new Error("Question text is required.")
+    throw new Error("Question text is required.");
   }
 
-  const maxMarks = Number(maxMarksValue)
+  const { user } = await requireRole(["professor"]);
 
-  if (Number.isNaN(maxMarks) || maxMarks < 0) {
-    throw new Error("Max marks must be a valid non-negative number.")
-  }
-
-  const { user } = await requireRole(["professor"])
-
-  const supabase = await createClient()
+  const supabase = await createClient();
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
     .select("id, professor_id, status")
     .eq("id", examId)
-    .single()
+    .single();
 
   if (examError || !exam) {
-    throw new Error("Exam not found or you do not have access to it.")
+    throw new Error("Exam not found or you do not have access to it.");
   }
 
   if (exam.professor_id !== user.id) {
-    throw new Error("You are not allowed to add questions to this exam.")
+    throw new Error("You are not allowed to add questions to this exam.");
   }
 
   const { count, error: countError } = await supabase
     .from("questions")
     .select("id", { count: "exact", head: true })
-    .eq("exam_id", examId)
+    .eq("exam_id", examId);
 
   if (countError) {
-    throw new Error(countError.message)
+    throw new Error(countError.message);
   }
 
-  const nextQuestionOrder = (count || 0) + 1
+  const nextQuestionOrder = (count || 0) + 1;
 
   const { error: insertError } = await supabase.from("questions").insert({
     exam_id: examId,
@@ -118,10 +110,10 @@ export async function createQuestion(formData: FormData) {
     max_marks: maxMarks,
     model_answer: modelAnswer || null,
     model_answer_status: modelAnswer ? "approved" : "not_provided",
-  })
+  });
 
   if (insertError) {
-    throw new Error(insertError.message)
+    throw new Error(insertError.message);
   }
 
   if (exam.status === "draft") {
@@ -130,77 +122,71 @@ export async function createQuestion(formData: FormData) {
       .update({
         status: "questions_added",
       })
-      .eq("id", examId)
+      .eq("id", examId);
 
     if (updateExamError) {
-      throw new Error(updateExamError.message)
+      throw new Error(updateExamError.message);
     }
   }
 
-  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
-  revalidatePath(ROUTES.PROFESSOR.EXAMS)
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+  revalidatePath(ROUTES.PROFESSOR.EXAMS);
 
-  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 }
 
 // ======================
 // CREATE RUBRIC
 // ======================
 export async function createRubric(formData: FormData) {
-  const examId = String(formData.get("examId") || "")
-  const questionId = String(formData.get("questionId") || "")
-  const criterionName = String(formData.get("criterionName") || "").trim()
+  const examId = String(formData.get("examId") || "");
+  const questionId = String(formData.get("questionId") || "");
+  const criterionName = String(formData.get("criterionName") || "").trim();
   const criterionDescription = String(
-    formData.get("criterionDescription") || ""
-  ).trim()
-  const maxMarksValue = String(formData.get("maxMarks") || "0").trim()
+    formData.get("criterionDescription") || "",
+  ).trim();
+  const maxMarks = parseMarksInput(formData.get("maxMarks"), "Max marks");
 
   if (!examId) {
-    throw new Error("Exam ID is required.")
+    throw new Error("Exam ID is required.");
   }
 
   if (!questionId) {
-    throw new Error("Question ID is required.")
+    throw new Error("Question ID is required.");
   }
 
   if (!criterionName) {
-    throw new Error("Criterion name is required.")
+    throw new Error("Criterion name is required.");
   }
 
-  const maxMarks = Number(maxMarksValue)
+  await requireRole(["professor"]);
 
-  if (Number.isNaN(maxMarks) || maxMarks < 0) {
-    throw new Error("Max marks must be a valid non-negative number.")
-  }
-
-  await requireRole(["professor"])
-
-  const supabase = await createClient()
+  const supabase = await createClient();
 
   const { data: question, error: questionError } = await supabase
     .from("questions")
     .select("id, exam_id")
     .eq("id", questionId)
-    .single()
+    .single();
 
   if (questionError || !question) {
-    throw new Error("Question not found or you do not have access to it.")
+    throw new Error("Question not found or you do not have access to it.");
   }
 
   if (question.exam_id !== examId) {
-    throw new Error("Question does not belong to this exam.")
+    throw new Error("Question does not belong to this exam.");
   }
 
   const { count, error: countError } = await supabase
     .from("rubrics")
     .select("id", { count: "exact", head: true })
-    .eq("question_id", questionId)
+    .eq("question_id", questionId);
 
   if (countError) {
-    throw new Error(countError.message)
+    throw new Error(countError.message);
   }
 
-  const nextCriterionOrder = (count || 0) + 1
+  const nextCriterionOrder = (count || 0) + 1;
 
   const { error: insertError } = await supabase.from("rubrics").insert({
     question_id: questionId,
@@ -208,13 +194,95 @@ export async function createRubric(formData: FormData) {
     criterion_name: criterionName,
     criterion_description: criterionDescription || null,
     max_marks: maxMarks,
-  })
+  });
 
   if (insertError) {
-    throw new Error(insertError.message)
+    throw new Error(insertError.message);
   }
 
-  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 
-  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+}
+
+// ======================
+// MARK EXAM RUBRIC READY
+// ======================
+export async function markExamRubricReady(formData: FormData) {
+  const examId = String(formData.get("examId") || "");
+
+  if (!examId) {
+    throw new Error("Exam ID is required.");
+  }
+
+  const { user } = await requireRole(["professor"]);
+
+  const supabase = await createClient();
+
+  const { data: exam, error: examError } = await supabase
+    .from("exams")
+    .select("id, professor_id, status")
+    .eq("id", examId)
+    .single();
+
+  if (examError || !exam) {
+    throw new Error("Exam not found or you do not have access to it.");
+  }
+
+  if (exam.professor_id !== user.id) {
+    throw new Error("You are not allowed to update this exam.");
+  }
+
+  if (exam.status === "archived" || exam.status === "published") {
+    throw new Error(
+      "Published or archived exams cannot be marked rubric ready.",
+    );
+  }
+
+  const { data: questions, error: questionsError } = await supabase
+    .from("questions")
+    .select("id, question_no, max_marks, model_answer, model_answer_status")
+    .eq("exam_id", examId);
+
+  if (questionsError) {
+    throw new Error(questionsError.message);
+  }
+
+  const questionIds = questions.map((question) => question.id);
+
+  const { data: rubrics, error: rubricsError } =
+    questionIds.length > 0
+      ? await supabase
+          .from("rubrics")
+          .select("question_id, max_marks")
+          .in("question_id", questionIds)
+      : { data: [], error: null };
+
+  if (rubricsError) {
+    throw new Error(rubricsError.message);
+  }
+
+  const readiness = checkExamRubricReadiness(questions, rubrics || []);
+
+  if (!readiness.isReady) {
+    throw new Error(
+      "Exam is not rubric ready. Please fix readiness issues first.",
+    );
+  }
+
+  const { error: updateError } = await supabase
+    .from("exams")
+    .update({
+      status: "rubric_ready",
+    })
+    .eq("id", examId);
+
+  if (updateError) {
+    throw new Error(updateError.message);
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+  revalidatePath(ROUTES.PROFESSOR.EXAMS);
+
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 }

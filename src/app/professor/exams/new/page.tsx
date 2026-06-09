@@ -1,10 +1,10 @@
-import Link from "next/link"
-import { createExam } from "@/features/exams/actions"
-import { requireRole } from "@/lib/auth"
-import { ROUTES } from "@/lib/routes"
+import Link from "next/link";
+import { createExam } from "@/features/exams/actions";
+import { requireRole } from "@/lib/auth";
+import { ROUTES } from "@/lib/routes";
 
 export default async function NewExamPage() {
-  const { profile } = await requireRole(["professor"])
+  const { profile } = await requireRole(["professor"]);
 
   return (
     <main style={{ padding: "40px", maxWidth: "700px" }}>
@@ -65,10 +65,11 @@ export default async function NewExamPage() {
           <br />
           <input
             name="totalMarks"
-            type="number"
-            min="0"
-            step="0.01"
+            type="text"
+            inputMode="decimal"
+            pattern="[0-9]+([.][0-9]{1,2})?"
             defaultValue="0"
+            placeholder="Example: 10 or 10.50"
             style={{ width: "100%", padding: "8px" }}
           />
         </div>
@@ -76,5 +77,5 @@ export default async function NewExamPage() {
         <button type="submit">Create Exam</button>
       </form>
     </main>
-  )
+  );
 }
