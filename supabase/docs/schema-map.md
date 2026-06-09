@@ -362,3 +362,97 @@ Professor:
 Student:
 
 - No direct access at this stage.
+
+## evaluation_jobs
+
+Tracks AI batch evaluation runs.
+
+Relation:
+
+- `evaluation_jobs.exam_id` references `exams.id`
+- `evaluation_jobs.created_by` references `profiles.id`
+
+Important fields:
+
+- `status`
+- `total_items`
+- `completed_items`
+- `failed_items`
+- `started_at`
+- `completed_at`
+- `error_message`
+- `job_metadata`
+
+Purpose:
+
+One job can evaluate many student answers.
+
+RLS:
+
+- Enabled
+- Policies will be added later
+
+## evaluations
+
+Stores AI, professor, and final evaluation for each student answer.
+
+Relation:
+
+- `evaluations.exam_id` references `exams.id`
+- `evaluations.student_answer_id` references `student_answers.id`
+- `evaluations.ai_job_id` optionally references `evaluation_jobs.id`
+
+Important fields:
+
+- `ai_score`
+- `professor_score`
+- `final_score`
+- `max_marks`
+- `quality_label`
+- `ai_confidence`
+- `ai_feedback`
+- `professor_feedback`
+- `teacher_review_summary`
+- `student_facing_justification`
+- `what_student_did_well`
+- `what_is_missing`
+- `ai_raw_output`
+- `status`
+
+Purpose:
+
+AI suggests. Professor reviews. Final score is published.
+
+RLS:
+
+- Enabled
+- Policies will be added later
+
+## evaluation_rubric_breakdowns
+
+Stores criterion-wise scoring for each evaluation.
+
+Relation:
+
+- `evaluation_rubric_breakdowns.evaluation_id` references `evaluations.id`
+- `evaluation_rubric_breakdowns.rubric_id` optionally references `rubrics.id`
+
+Important fields:
+
+- `criterion_name`
+- `criterion_description`
+- `max_marks`
+- `ai_awarded_marks`
+- `professor_awarded_marks`
+- `final_awarded_marks`
+- `ai_reason`
+- `professor_reason`
+
+Purpose:
+
+Keeps rubric-wise evidence for professor review and student-facing explanation.
+
+RLS:
+
+- Enabled
+- Policies will be added later
