@@ -305,3 +305,60 @@ RLS:
 - Enabled
 - Policies will be added later
 
+
+## Answer Upload RLS Rules
+
+### answer_uploads
+
+Admin:
+
+- Can access all upload records.
+
+Professor:
+
+- Can read uploads for own exams.
+- Can create uploads only for own exams.
+- `uploaded_by` must be current professor.
+- Can update uploads for own exams.
+- Can delete only non-imported uploads for own exams.
+
+Student:
+
+- No direct access at this stage.
+
+### exam_students
+
+Admin:
+
+- Can access all imported student records.
+
+Professor:
+
+- Can read imported students for own exams.
+- Can create imported students for own exams.
+- Upload must belong to the same exam.
+- Can update imported students for own exams.
+- Can delete imported students for own exams.
+
+Student:
+
+- No direct access at this stage.
+
+### student_answers
+
+Admin:
+
+- Can access all student answers.
+
+Professor:
+
+- Can read student answers for own exams.
+- Can create student answers for own exams.
+- Imported student must belong to same exam.
+- Question must belong to same exam.
+- Can update student answers for own exams.
+- Can delete student answers for own exams.
+
+Student:
+
+- No direct access at this stage.
