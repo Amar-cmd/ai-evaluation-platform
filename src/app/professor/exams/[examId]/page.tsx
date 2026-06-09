@@ -5,6 +5,7 @@ import {
   createRubric,
   markExamRubricReady,
   importMappedAnswers,
+  createEvaluationJobAndSeedPending,
 } from "@/features/exams/actions";
 
 import { checkExamRubricReadiness } from "@/features/exams/readiness";
@@ -117,6 +118,37 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
       row.upload_id,
       (uploadRowCounts.get(row.upload_id) || 0) + 1,
     );
+  }
+
+  const { count: importedAnswerCount, error: importedAnswerCountError } =
+    await supabase
+      .from("student_answers")
+      .select("id", { count: "exact", head: true })
+      .eq("exam_id", examId);
+
+  if (importedAnswerCountError) {
+    throw new Error(importedAnswerCountError.message);
+  }
+
+  const { count: evaluationCount, error: evaluationCountError } = await supabase
+    .from("evaluations")
+    .select("id", { count: "exact", head: true })
+    .eq("exam_id", examId);
+
+  if (evaluationCountError) {
+    throw new Error(evaluationCountError.message);
+  }
+
+  const { data: evaluationJobs, error: evaluationJobsError } = await supabase
+    .from("evaluation_jobs")
+    .select(
+      "id, status, total_items, completed_items, failed_items, created_at, started_at, completed_at",
+    )
+    .eq("exam_id", examId)
+    .order("created_at", { ascending: false });
+
+  if (evaluationJobsError) {
+    throw new Error(evaluationJobsError.message);
   }
 
   return (
@@ -373,6 +405,89 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                 )}
               </article>
             ))}
+          </div>
+        )}
+      </section>
+
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "8px",
+          padding: "16px",
+          marginBottom: "32px",
+        }}
+      >
+        <h2>Evaluation Setup</h2>
+
+        <p>
+          <strong>Imported Student Answers:</strong> {importedAnswerCount || 0}
+        </p>
+
+        <p>
+          <strong>Evaluation Records:</strong> {evaluationCount || 0}
+        </p>
+
+        {!readiness.isReady && (
+          <p style={{ color: "crimson" }}>
+            Complete rubric readiness before creating evaluation records.
+          </p>
+        )}
+
+        {(importedAnswerCount || 0) === 0 && (
+          <p style={{ color: "crimson" }}>
+            Import mapped answers before creating evaluation records.
+          </p>
+        )}
+
+        {profile.role === "professor" &&
+          readiness.isReady &&
+          (importedAnswerCount || 0) > 0 &&
+          (evaluationCount || 0) < (importedAnswerCount || 0) && (
+            <form action={createEvaluationJobAndSeedPending}>
+              <input type="hidden" name="examId" value={exam.id} />
+
+              <button type="submit">Create Pending Evaluation Records</button>
+            </form>
+          )}
+
+        {(evaluationCount || 0) === (importedAnswerCount || 0) &&
+          (importedAnswerCount || 0) > 0 && (
+            <p style={{ color: "green" }}>
+              Pending evaluation records are ready.
+            </p>
+          )}
+
+        {evaluationJobs.length > 0 && (
+          <div style={{ marginTop: "24px" }}>
+            <h3>Evaluation Jobs</h3>
+
+            <div style={{ display: "grid", gap: "12px" }}>
+              {evaluationJobs.map((job) => (
+                <article
+                  key={job.id}
+                  style={{
+                    border: "1px solid #eee",
+                    borderRadius: "6px",
+                    padding: "12px",
+                  }}
+                >
+                  <p>
+                    <strong>Status:</strong> {job.status}
+                  </p>
+
+                  <p>
+                    <strong>Total:</strong> {job.total_items} |{" "}
+                    <strong>Completed:</strong> {job.completed_items} |{" "}
+                    <strong>Failed:</strong> {job.failed_items}
+                  </p>
+
+                  <p>
+                    <strong>Created:</strong>{" "}
+                    {new Date(job.created_at).toLocaleString()}
+                  </p>
+                </article>
+              ))}
+            </div>
           </div>
         )}
       </section>

@@ -945,3 +945,267 @@ function chunkArray<T>(items: T[], size: number) {
 
   return chunks;
 }
+
+
+// --------------------------------------------
+
+type StudentAnswerForEvaluationSeed = {
+  id: string
+  question_id: string
+}
+
+type QuestionForEvaluationSeed = {
+  id: string
+  question_no: string
+  max_marks: number | string
+  model_answer: string | null
+  model_answer_status: string
+}
+
+type RubricForEvaluationSeed = {
+  id: string
+  question_id: string
+  criterion_name: string
+  criterion_description: string | null
+  max_marks: number | string
+}
+
+export async function createEvaluationJobAndSeedPending(formData: FormData) {
+  const examId = String(formData.get("examId") || "")
+
+  if (!examId) {
+    throw new Error("Exam ID is required.")
+  }
+
+  const { user } = await requireRole(["professor"])
+
+  const supabase = await createClient()
+
+  const { data: exam, error: examError } = await supabase
+    .from("exams")
+    .select("id, professor_id, status")
+    .eq("id", examId)
+    .single()
+
+  if (examError || !exam) {
+    throw new Error("Exam not found or you do not have access to it.")
+  }
+
+  if (exam.professor_id !== user.id) {
+    throw new Error("You are not allowed to create evaluations for this exam.")
+  }
+
+  if (exam.status === "published" || exam.status === "archived") {
+    throw new Error("Cannot create evaluations for published or archived exams.")
+  }
+
+  const { data: questions, error: questionsError } = await supabase
+    .from("questions")
+    .select("id, question_no, max_marks, model_answer, model_answer_status")
+    .eq("exam_id", examId)
+    .order("question_order", { ascending: true })
+
+  if (questionsError) {
+    throw new Error(questionsError.message)
+  }
+
+  const typedQuestions = (questions || []) as QuestionForEvaluationSeed[]
+
+  if (typedQuestions.length === 0) {
+    throw new Error("Please add questions before creating evaluations.")
+  }
+
+  const questionIds = typedQuestions.map((question) => question.id)
+
+  const { data: rubrics, error: rubricsError } =
+    questionIds.length > 0
+      ? await supabase
+          .from("rubrics")
+          .select(
+            "id, question_id, criterion_name, criterion_description, max_marks"
+          )
+          .in("question_id", questionIds)
+      : { data: [], error: null }
+
+  if (rubricsError) {
+    throw new Error(rubricsError.message)
+  }
+
+  const typedRubrics = (rubrics || []) as RubricForEvaluationSeed[]
+
+  const readiness = checkExamRubricReadiness(typedQuestions, typedRubrics)
+
+  if (!readiness.isReady) {
+    throw new Error(
+      "Exam is not evaluation-ready. Please complete model answers and rubrics first."
+    )
+  }
+
+  const { data: studentAnswers, error: studentAnswersError } = await supabase
+    .from("student_answers")
+    .select("id, question_id")
+    .eq("exam_id", examId)
+
+  if (studentAnswersError) {
+    throw new Error(studentAnswersError.message)
+  }
+
+  const typedStudentAnswers =
+    (studentAnswers || []) as StudentAnswerForEvaluationSeed[]
+
+  if (typedStudentAnswers.length === 0) {
+    throw new Error(
+      "No imported student answers found. Please import mapped answers first."
+    )
+  }
+
+  const { data: existingEvaluations, error: existingEvaluationsError } =
+    await supabase
+      .from("evaluations")
+      .select("student_answer_id")
+      .eq("exam_id", examId)
+
+  if (existingEvaluationsError) {
+    throw new Error(existingEvaluationsError.message)
+  }
+
+  const existingStudentAnswerIds = new Set(
+    (existingEvaluations || []).map(
+      (evaluation) => evaluation.student_answer_id
+    )
+  )
+
+  const studentAnswersToSeed = typedStudentAnswers.filter(
+    (studentAnswer) => !existingStudentAnswerIds.has(studentAnswer.id)
+  )
+
+  if (studentAnswersToSeed.length === 0) {
+    throw new Error(
+      "All imported student answers already have evaluation records."
+    )
+  }
+
+  const questionMaxMarksById = new Map<string, number | string>()
+
+  for (const question of typedQuestions) {
+    questionMaxMarksById.set(question.id, question.max_marks)
+  }
+
+  const rubricsByQuestionId = new Map<string, RubricForEvaluationSeed[]>()
+
+  for (const question of typedQuestions) {
+    rubricsByQuestionId.set(question.id, [])
+  }
+
+  for (const rubric of typedRubrics) {
+    const existing = rubricsByQuestionId.get(rubric.question_id) || []
+    rubricsByQuestionId.set(rubric.question_id, [...existing, rubric])
+  }
+
+  const { data: evaluationJob, error: evaluationJobError } = await supabase
+    .from("evaluation_jobs")
+    .insert({
+      exam_id: examId,
+      created_by: user.id,
+      status: "queued",
+      total_items: studentAnswersToSeed.length,
+      completed_items: 0,
+      failed_items: 0,
+      job_metadata: {
+        source: "manual_seed_pending_evaluations",
+        note: "Pending evaluation records created before AI execution.",
+      },
+    })
+    .select("id")
+    .single()
+
+  if (evaluationJobError || !evaluationJob) {
+    throw new Error(
+      evaluationJobError?.message || "Failed to create evaluation job."
+    )
+  }
+
+  const evaluationsToInsert = studentAnswersToSeed.map((studentAnswer) => {
+    const maxMarks = questionMaxMarksById.get(studentAnswer.question_id)
+
+    if (maxMarks === undefined) {
+      throw new Error("Student answer is linked to an unknown question.")
+    }
+
+    return {
+      exam_id: examId,
+      student_answer_id: studentAnswer.id,
+      ai_job_id: evaluationJob.id,
+      max_marks: maxMarks,
+      status: "pending",
+    }
+  })
+
+  const createdEvaluations: {
+    id: string
+    student_answer_id: string
+  }[] = []
+
+  const evaluationChunks = chunkArray(evaluationsToInsert, 500)
+
+  for (const chunk of evaluationChunks) {
+    const { data: insertedEvaluations, error: evaluationsInsertError } =
+      await supabase
+        .from("evaluations")
+        .insert(chunk)
+        .select("id, student_answer_id")
+
+    if (evaluationsInsertError || !insertedEvaluations) {
+      throw new Error(
+        evaluationsInsertError?.message || "Failed to create evaluations."
+      )
+    }
+
+    createdEvaluations.push(...insertedEvaluations)
+  }
+
+  const studentAnswerById = new Map<string, StudentAnswerForEvaluationSeed>()
+
+  for (const studentAnswer of studentAnswersToSeed) {
+    studentAnswerById.set(studentAnswer.id, studentAnswer)
+  }
+
+  const breakdownsToInsert = []
+
+  for (const evaluation of createdEvaluations) {
+    const studentAnswer = studentAnswerById.get(evaluation.student_answer_id)
+
+    if (!studentAnswer) {
+      throw new Error("Could not link evaluation to student answer.")
+    }
+
+    const questionRubrics =
+      rubricsByQuestionId.get(studentAnswer.question_id) || []
+
+    for (const rubric of questionRubrics) {
+      breakdownsToInsert.push({
+        evaluation_id: evaluation.id,
+        rubric_id: rubric.id,
+        criterion_name: rubric.criterion_name,
+        criterion_description: rubric.criterion_description,
+        max_marks: rubric.max_marks,
+      })
+    }
+  }
+
+  const breakdownChunks = chunkArray(breakdownsToInsert, 500)
+
+  for (const chunk of breakdownChunks) {
+    const { error: breakdownsInsertError } = await supabase
+      .from("evaluation_rubric_breakdowns")
+      .insert(chunk)
+
+    if (breakdownsInsertError) {
+      throw new Error(breakdownsInsertError.message)
+    }
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId))
+}
