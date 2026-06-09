@@ -456,3 +456,61 @@ RLS:
 
 - Enabled
 - Policies will be added later
+
+## Evaluation RLS Rules
+
+### evaluation_jobs
+
+Admin:
+
+- Can access all evaluation jobs.
+
+Professor:
+
+- Can read AI jobs for own exams.
+- Can create AI jobs for own exams.
+- `created_by` must be current professor.
+- Can update AI jobs for own exams.
+- Can delete only queued, failed, or cancelled jobs for own exams.
+
+Student:
+
+- No direct access at this stage.
+
+### evaluations
+
+Admin:
+
+- Can access all evaluations.
+
+Professor:
+
+- Can read evaluations for own exams.
+- Can create evaluations for own exams.
+- Student answer must belong to same exam.
+- AI job, if present, must belong to same exam.
+- Can update evaluations for own exams.
+- Can delete only pending / AI-checked / professor-review-pending evaluations for own exams.
+
+Student:
+
+- No direct access to raw/internal evaluations at this stage.
+- Student-facing published result access will be added later.
+
+### evaluation_rubric_breakdowns
+
+Admin:
+
+- Can access all rubric breakdowns.
+
+Professor:
+
+- Can read rubric breakdowns for own exam evaluations.
+- Can create rubric breakdowns for own exam evaluations.
+- Rubric, if linked, must belong to same exam as the evaluation.
+- Can update rubric breakdowns for own exam evaluations.
+- Can delete rubric breakdowns for own exam evaluations.
+
+Student:
+
+- No direct access at this stage.
