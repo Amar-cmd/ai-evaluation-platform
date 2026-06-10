@@ -551,3 +551,39 @@ Student ownership is determined through:
 - or `lower(exam_students.email) = lower(current user's profile email)`
 
 Direct student SELECT policies on `evaluations` are intentionally not added.
+
+## result_flags
+
+Stores student-raised objections or queries on published question-wise evaluations.
+
+Relation:
+
+- `result_flags.exam_id` references `exams.id`
+- `result_flags.exam_student_id` references `exam_students.id`
+- `result_flags.evaluation_id` references `evaluations.id`
+- `result_flags.student_id` references `profiles.id`
+- `result_flags.resolved_by` references `profiles.id`
+
+Important fields:
+
+- `status`
+- `student_message`
+- `professor_response`
+- `resolved_by`
+- `resolved_at`
+
+Status values:
+
+- `open`
+- `under_review`
+- `resolved`
+- `rejected`
+
+Rules:
+
+- Student can raise a flag only on own published result.
+- Student cannot flag unpublished evaluations.
+- Student cannot flag other students' evaluations.
+- Student can have only one active flag per evaluation.
+- Professor can read/update flags only for own exams.
+- Professor can resolve or reject flags.
