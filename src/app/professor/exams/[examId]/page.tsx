@@ -173,6 +173,15 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
     throw new Error(evaluationJobsError.message);
   }
 
+  const { count: resultFlagCount, error: resultFlagCountError } = await supabase
+    .from("result_flags")
+    .select("id", { count: "exact", head: true })
+    .eq("exam_id", examId);
+
+  if (resultFlagCountError) {
+    throw new Error(resultFlagCountError.message);
+  }
+
   return (
     <main style={{ padding: "40px", maxWidth: "1000px" }}>
       <p>
@@ -213,6 +222,12 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
 
         <p>
           <strong>Created:</strong> {new Date(exam.created_at).toLocaleString()}
+        </p>
+
+        <p>
+          <Link href={ROUTES.PROFESSOR.EXAM_FLAGS(exam.id)}>
+            View Student Result Queries ({resultFlagCount || 0})
+          </Link>
         </p>
       </section>
 
@@ -465,7 +480,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
             </Link>
           </p>
         )}
-        
+
         {!readiness.isReady && (
           <p style={{ color: "crimson" }}>
             Complete rubric readiness before creating evaluation records.
@@ -496,17 +511,14 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
             </p>
           )}
 
-        {profile.role === "professor" &&
-          pendingEvaluationCount > 0 && (
-            <form action={runMockAiEvaluationForExam}>
-              <input type="hidden" name="examId" value={exam.id} />
+        {profile.role === "professor" && pendingEvaluationCount > 0 && (
+          <form action={runMockAiEvaluationForExam}>
+            <input type="hidden" name="examId" value={exam.id} />
 
-              <button type="submit">
-                Run Mock AI Evaluation
-              </button>
-            </form>
-          )}
-          
+            <button type="submit">Run Mock AI Evaluation</button>
+          </form>
+        )}
+
         {evaluationJobs.length > 0 && (
           <div style={{ marginTop: "24px" }}>
             <h3>Evaluation Jobs</h3>

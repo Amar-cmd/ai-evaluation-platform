@@ -16,6 +16,7 @@ export const ROUTES = {
     MAP_ANSWER_UPLOAD: (examId: string, uploadId: string) =>
   `/professor/exams/${examId}/uploads/${uploadId}/map`,
     EXAM_REVIEW: (examId: string) => `/professor/exams/${examId}/review`,
+    EXAM_FLAGS: (examId: string) => `/professor/exams/${examId}/flags`,
   },
 
   STUDENT: {
