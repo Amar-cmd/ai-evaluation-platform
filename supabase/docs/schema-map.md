@@ -514,3 +514,40 @@ Professor:
 Student:
 
 - No direct access at this stage.
+
+## Student Result Access
+
+Student result access is handled through a safe RPC function:
+
+- `get_my_published_results()`
+
+Reason:
+
+Students must not get direct access to internal evaluation columns such as:
+
+- `ai_raw_output`
+- `ai_confidence`
+- `professor_feedback`
+- `teacher_review_summary`
+- internal review user IDs
+
+The RPC returns only student-safe published result data:
+
+- exam title
+- subject/course/batch
+- published date
+- student name/id/email
+- total score
+- total max marks
+- question-wise final marks
+- student-facing justification
+- what student did well
+- what is missing
+- rubric-wise final marks and final reason
+
+Student ownership is determined through:
+
+- `exam_students.profile_id = auth.uid()`
+- or `lower(exam_students.email) = lower(current user's profile email)`
+
+Direct student SELECT policies on `evaluations` are intentionally not added.
