@@ -1,33 +1,24 @@
-import { requireProfile } from "@/lib/auth"
+import Link from "next/link"
 import { LogoutButton } from "@/components/logout-button"
+import { requireStudent } from "@/lib/auth"
+import { ROUTES } from "@/lib/routes"
 
 export default async function StudentDashboardPage() {
-  const { profile } = await requireProfile()
+  const { profile } = await requireStudent()
 
   return (
     <main style={{ padding: "40px" }}>
       <h1>Student Dashboard</h1>
 
-      <p>
-        Welcome, <strong>{profile.full_name || profile.email}</strong>
-      </p>
+      <p>Welcome, {profile.full_name || profile.email}</p>
 
-      <p>
-        Role: <strong>{profile.role}</strong>
-      </p>
+      <nav style={{ display: "grid", gap: "12px", marginTop: "24px" }}>
+        <Link href={ROUTES.STUDENT.RESULTS}>View My Results</Link>
+      </nav>
 
-      <section style={{ marginTop: "32px" }}>
-        <h2>Coming Later</h2>
-
-        <ol>
-          <li>View published results</li>
-          <li>View question-wise justification</li>
-          <li>Raise flag or objection</li>
-          <li>View professor reply</li>
-        </ol>
-      </section>
-
-      <LogoutButton />
+      <div style={{ marginTop: "24px" }}>
+        <LogoutButton />
+      </div>
     </main>
   )
 }
