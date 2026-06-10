@@ -458,6 +458,14 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
           {professorReviewPendingCount}
         </p>
 
+        {(evaluationCount || 0) > 0 && (
+          <p>
+            <Link href={ROUTES.PROFESSOR.EXAM_REVIEW(exam.id)}>
+              Open Professor Review Dashboard
+            </Link>
+          </p>
+        )}
+        
         {!readiness.isReady && (
           <p style={{ color: "crimson" }}>
             Complete rubric readiness before creating evaluation records.
