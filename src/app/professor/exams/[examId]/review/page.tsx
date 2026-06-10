@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import {
   approveAiEvaluation,
   modifyEvaluationByProfessor,
+  publishExamResults,
 } from "@/features/evaluations/actions";
 import { requireProfessorOrAdmin } from "@/lib/auth";
 import { formatMarks } from "@/lib/marks";
@@ -149,6 +150,7 @@ export default async function ProfessorExamReviewPage({
       "professor_review_pending",
       "approved",
       "modified_by_professor",
+      "published",
     ])
     .order("created_at", { ascending: true });
 
@@ -159,6 +161,24 @@ export default async function ProfessorExamReviewPage({
   const reviewEvaluations = (evaluations || []) as ReviewEvaluation[];
 
   const statusCounts = countByStatus(reviewEvaluations);
+
+  const pendingReviewCount = statusCounts.get("professor_review_pending") || 0;
+
+  const approvedCount = statusCounts.get("approved") || 0;
+
+  const modifiedCount = statusCounts.get("modified_by_professor") || 0;
+
+  const publishedCount = statusCounts.get("published") || 0;
+
+  const publishReadyCount = approvedCount + modifiedCount;
+
+  const canPublishResults =
+    profile.role === "professor" &&
+    exam.status !== "published" &&
+    exam.status !== "archived" &&
+    reviewEvaluations.length > 0 &&
+    pendingReviewCount === 0 &&
+    publishReadyCount === reviewEvaluations.length;
 
   return (
     <main style={{ padding: "40px" }}>
@@ -201,19 +221,52 @@ export default async function ProfessorExamReviewPage({
         </p>
 
         <p>
-          <strong>Pending Review:</strong>{" "}
-          {statusCounts.get("professor_review_pending") || 0}
+          <strong>Pending Review:</strong> {pendingReviewCount}
         </p>
 
         <p>
-          <strong>Approved:</strong> {statusCounts.get("approved") || 0}
+          <strong>Approved:</strong> {approvedCount}
         </p>
 
         <p>
-          <strong>Modified:</strong>{" "}
-          {statusCounts.get("modified_by_professor") || 0}
+          <strong>Modified:</strong> {modifiedCount}
+        </p>
+
+        <p>
+          <strong>Published:</strong> {publishedCount}
         </p>
       </section>
+
+      {canPublishResults && (
+        <form action={publishExamResults} style={{ marginTop: "16px" }}>
+          <input type="hidden" name="examId" value={exam.id} />
+
+          <button type="submit">Publish Final Results</button>
+        </form>
+      )}
+
+      {exam.status !== "published" &&
+        reviewEvaluations.length > 0 &&
+        pendingReviewCount > 0 && (
+          <p style={{ color: "crimson" }}>
+            Approve or modify all pending review items before publishing.
+          </p>
+        )}
+
+      {exam.status !== "published" &&
+        reviewEvaluations.length > 0 &&
+        pendingReviewCount === 0 &&
+        publishReadyCount !== reviewEvaluations.length && (
+          <p style={{ color: "crimson" }}>
+            Only approved or professor-modified evaluations can be published.
+          </p>
+        )}
+
+      {exam.status === "published" && (
+        <p style={{ color: "green", marginTop: "16px" }}>
+          Final results have been published.
+        </p>
+      )}
 
       {reviewEvaluations.length === 0 ? (
         <section
@@ -465,6 +518,7 @@ export default async function ProfessorExamReviewPage({
                   )}
 
                 {profile.role === "professor" &&
+                  exam.status !== "published" &&
                   [
                     "professor_review_pending",
                     "approved",
@@ -621,6 +675,14 @@ export default async function ProfessorExamReviewPage({
                 {evaluation.status === "modified_by_professor" && (
                   <p style={{ color: "green", marginTop: "16px" }}>
                     Modified by professor. Final score:{" "}
+                    {formatMarks(evaluation.final_score)} /{" "}
+                    {formatMarks(evaluation.max_marks)}
+                  </p>
+                )}
+
+                {evaluation.status === "published" && (
+                  <p style={{ color: "green", marginTop: "16px" }}>
+                    Published. Final score:{" "}
                     {formatMarks(evaluation.final_score)} /{" "}
                     {formatMarks(evaluation.max_marks)}
                   </p>
