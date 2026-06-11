@@ -31,7 +31,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
   const { data: exam, error: examError } = await supabase
     .from("exams")
     .select(
-      "id, title, subject, course, batch, total_marks, status, published_at, created_at",
+      "id, title, subject, course, batch, total_marks, exam_mode, status, published_at, created_at",
     )
     .eq("id", examId)
     .single();
@@ -43,7 +43,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
   const { data: questions, error: questionsError } = await supabase
     .from("questions")
     .select(
-      "id, question_no, question_order, question_text, question_type, max_marks, model_answer, model_answer_status, created_at",
+      "id, question_no,  question_code, question_order, question_text, question_type,question_category, expected_answer_format, is_ai_evaluable, max_marks, model_answer, model_answer_status, created_at",
     )
     .eq("exam_id", examId)
     .order("question_order", { ascending: true });
@@ -218,6 +218,10 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
 
         <p>
           <strong>Total Marks:</strong> {formatMarks(exam.total_marks)}
+        </p>
+
+        <p>
+          <strong>Exam Mode:</strong> {exam.exam_mode}
         </p>
 
         <p>
@@ -579,6 +583,21 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
               />
             </div>
 
+            <div style={{ marginBottom: "12px" }}>
+              <label>Question Code</label>
+              <br />
+              <input
+                name="questionCode"
+                type="text"
+                placeholder="Example: IR-Q001, CASE-05"
+                style={{ width: "100%", padding: "8px" }}
+              />
+              <p style={{ fontSize: "13px", color: "#555" }}>
+                Optional but recommended for master question bank, export, and
+                future mapping.
+              </p>
+            </div>
+
             <div style={{ marginBottom: "16px" }}>
               <label>Question Type</label>
               <br />
@@ -593,6 +612,40 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                 <option value="essay">Essay</option>
                 <option value="other">Other</option>
               </select>
+            </div>
+
+            <div style={{ marginBottom: "12px" }}>
+              <label>Question Category</label>
+              <br />
+              <input
+                name="questionCategory"
+                type="text"
+                placeholder="Example: concept, case_based, application, essay"
+                style={{ width: "100%", padding: "8px" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: "12px" }}>
+              <label>Expected Answer Format</label>
+              <br />
+              <input
+                name="expectedAnswerFormat"
+                type="text"
+                placeholder="Example: one_line, paragraph, case_analysis, essay"
+                style={{ width: "100%", padding: "8px" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: "12px" }}>
+              <label>
+                <input name="isAiEvaluable" type="checkbox" defaultChecked />{" "}
+                Include this question in AI subjective evaluation
+              </label>
+
+              <p style={{ fontSize: "13px", color: "#555" }}>
+                Keep this checked for subjective/case/essay answers. Objective
+                questions will be handled separately in upcoming steps.
+              </p>
             </div>
 
             <div style={{ marginBottom: "16px" }}>
@@ -663,6 +716,25 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
 
                 <p>
                   <strong>Max Marks:</strong> {formatMarks(question.max_marks)}
+                </p>
+
+                <p>
+                  <strong>Question Code:</strong>{" "}
+                  {question.question_code || "-"}
+                </p>
+
+                <p>
+                  <strong>Category:</strong> {question.question_category || "-"}
+                </p>
+
+                <p>
+                  <strong>Expected Format:</strong>{" "}
+                  {question.expected_answer_format || "-"}
+                </p>
+
+                <p>
+                  <strong>AI Evaluable:</strong>{" "}
+                  {question.is_ai_evaluable ? "Yes" : "No"}
                 </p>
 
                 <p>

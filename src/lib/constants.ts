@@ -46,3 +46,17 @@ export const FLAG_STATUS = {
   RESOLVED: "resolved",
   REJECTED: "rejected",
 } as const
+
+export const EXAM_MODE = {
+  FIXED_PAPER: "fixed_paper",
+  RANDOMIZED_QUESTION_BANK: "randomized_question_bank",
+} as const
+
+export const QUESTION_TYPE = {
+  OBJECTIVE: "objective",
+  SHORT_ANSWER: "short_answer",
+  LONG_ANSWER: "long_answer",
+  CASE_BASED: "case_based",
+  ESSAY: "essay",
+  OTHER: "other",
+} as const

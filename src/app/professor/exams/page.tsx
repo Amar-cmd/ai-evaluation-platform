@@ -11,7 +11,7 @@ export default async function ProfessorExamsPage() {
   const { data: exams, error } = await supabase
     .from("exams")
     .select(
-      "id, title, subject, course, batch, total_marks, status, published_at, created_at",
+      "id, title, subject, course, batch, total_marks, exam_mode, status, published_at, created_at",
     )
     .order("created_at", { ascending: false });
 
@@ -90,6 +90,10 @@ export default async function ProfessorExamsPage() {
 
                 <p>
                   <strong>Total Marks:</strong> {exam.total_marks}
+                </p>
+
+                <p>
+                  <strong>Mode:</strong> {exam.exam_mode}
                 </p>
 
                 <p>

@@ -587,3 +587,32 @@ Rules:
 - Student can have only one active flag per evaluation.
 - Professor can read/update flags only for own exams.
 - Professor can resolve or reject flags.
+
+## Master Question Bank Foundation
+
+From Step 40 onward, the `questions` table should be treated as the master question bank for an exam.
+
+### Exam Mode
+
+`exams.exam_mode` controls how uploaded answer responses should be mapped.
+
+Values:
+
+- `fixed_paper`
+- `randomized_question_bank`
+
+Meaning:
+
+- `fixed_paper`: all students receive the same question order; response-column mapping can be used.
+- `randomized_question_bank`: students may receive different questions/order; answer-cell mapping is required.
+
+### Question Bank Fields
+
+Additional fields on `questions`:
+
+- `question_code`: stable code for a master question bank item.
+- `is_ai_evaluable`: whether the question should enter subjective AI evaluation.
+- `question_category`: flexible category label such as concept, case_based, essay, objective.
+- `expected_answer_format`: optional expected answer style such as one_line, paragraph, case_analysis, essay.
+
+Subjective manual question creation remains supported. Objective question options will be added in a later step.

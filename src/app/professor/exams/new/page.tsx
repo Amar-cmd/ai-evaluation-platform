@@ -76,6 +76,29 @@ export default async function NewExamPage() {
 
         <button type="submit">Create Exam</button>
       </form>
+
+      <div style={{ marginBottom: "16px" }}>
+        <label>Exam Mode</label>
+        <br />
+        <select
+          name="examMode"
+          defaultValue="fixed_paper"
+          style={{ width: "100%", padding: "8px" }}
+        >
+          <option value="fixed_paper">
+            Fixed Paper — same question order for all students
+          </option>
+          <option value="randomized_question_bank">
+            Randomized Question Bank — questions may differ per student
+          </option>
+        </select>
+
+        <p style={{ fontSize: "14px", color: "#555" }}>
+          Use Fixed Paper when response columns map globally to questions. Use
+          Randomized Question Bank when each student's response slot may
+          represent a different question.
+        </p>
+      </div>
     </main>
   );
 }
