@@ -59,7 +59,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
       ? await supabase
           .from("rubrics")
           .select(
-            "id, question_id, criterion_order, criterion_name, criterion_description, max_marks, created_at",
+            "id, question_id, criterion_order, criterion_name, criterion_description, max_marks, is_template_generated, source_template_id, created_at",
           )
           .in("question_id", questionIds)
           .order("criterion_order", { ascending: true })
@@ -231,6 +231,12 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
         <p>
           <Link href={ROUTES.PROFESSOR.EXAM_FLAGS(exam.id)}>
             View Student Result Queries ({resultFlagCount || 0})
+          </Link>
+        </p>
+
+        <p>
+          <Link href={ROUTES.PROFESSOR.RUBRIC_TEMPLATES(exam.id)}>
+            Manage Rubric Templates
           </Link>
         </p>
       </section>
@@ -583,21 +589,6 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
               />
             </div>
 
-            <div style={{ marginBottom: "12px" }}>
-              <label>Question Code</label>
-              <br />
-              <input
-                name="questionCode"
-                type="text"
-                placeholder="Example: IR-Q001, CASE-05"
-                style={{ width: "100%", padding: "8px" }}
-              />
-              <p style={{ fontSize: "13px", color: "#555" }}>
-                Optional but recommended for master question bank, export, and
-                future mapping.
-              </p>
-            </div>
-
             <div style={{ marginBottom: "16px" }}>
               <label>Question Type</label>
               <br />
@@ -614,27 +605,6 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
               </select>
             </div>
 
-            <div style={{ marginBottom: "12px" }}>
-              <label>Question Category</label>
-              <br />
-              <input
-                name="questionCategory"
-                type="text"
-                placeholder="Example: concept, case_based, application, essay"
-                style={{ width: "100%", padding: "8px" }}
-              />
-            </div>
-
-            <div style={{ marginBottom: "12px" }}>
-              <label>Expected Answer Format</label>
-              <br />
-              <input
-                name="expectedAnswerFormat"
-                type="text"
-                placeholder="Example: one_line, paragraph, case_analysis, essay"
-                style={{ width: "100%", padding: "8px" }}
-              />
-            </div>
 
             <div style={{ marginBottom: "12px" }}>
               <label>
@@ -719,25 +689,6 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                 </p>
 
                 <p>
-                  <strong>Question Code:</strong>{" "}
-                  {question.question_code || "-"}
-                </p>
-
-                <p>
-                  <strong>Category:</strong> {question.question_category || "-"}
-                </p>
-
-                <p>
-                  <strong>Expected Format:</strong>{" "}
-                  {question.expected_answer_format || "-"}
-                </p>
-
-                <p>
-                  <strong>AI Evaluable:</strong>{" "}
-                  {question.is_ai_evaluable ? "Yes" : "No"}
-                </p>
-
-                <p>
                   <strong>Model Answer Status:</strong>{" "}
                   {question.model_answer_status}
                 </p>
@@ -765,7 +716,11 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                   questionId={question.id}
                   questionMaxMarks={Number(question.max_marks)}
                   rubrics={rubricsByQuestion.get(question.id) || []}
-                  canEdit={profile.role === "professor"}
+                  canEdit={
+                    profile.role === "professor" &&
+                    exam.status !== "published" &&
+                    exam.status !== "archived"
+                  }
                 />
               </article>
             ))}
@@ -784,6 +739,8 @@ type RubricRow = {
   criterion_description: string | null;
   max_marks: number | string;
   created_at: string;
+  is_template_generated: boolean;
+  source_template_id: string | null;
 };
 
 function RubricSection({
@@ -803,17 +760,37 @@ function RubricSection({
     return total + Number(rubric.max_marks);
   }, 0);
 
-  const isExactMatch = rubricTotal === questionMaxMarks;
+  const isExactMatch = Math.abs(rubricTotal - questionMaxMarks) < 0.001;
   const isOverLimit = rubricTotal > questionMaxMarks;
   const isUnderLimit = rubricTotal < questionMaxMarks;
 
+  const templateGeneratedCount = rubrics.filter(
+    (rubric) => rubric.is_template_generated,
+  ).length;
+
+  const manualRubricCount = rubrics.length - templateGeneratedCount;
+
   return (
     <section>
-      <h4>Rubric Criteria</h4>
+      <h4>Question Rubric Criteria</h4>
 
       <p>
-        <strong>Rubric Total:</strong> {rubricTotal} / {questionMaxMarks}
+        <strong>Rubric Total:</strong> {formatMarks(rubricTotal)} /{" "}
+        {formatMarks(questionMaxMarks)}
       </p>
+
+      {rubrics.length > 0 && (
+        <p>
+          <strong>Source:</strong>{" "}
+          {templateGeneratedCount > 0 && (
+            <>
+              {templateGeneratedCount} template-generated
+              {manualRubricCount > 0 ? ", " : ""}
+            </>
+          )}
+          {manualRubricCount > 0 && <>{manualRubricCount} manual</>}
+        </p>
+      )}
 
       {rubrics.length > 0 && isExactMatch && (
         <p style={{ color: "green" }}>
@@ -834,7 +811,17 @@ function RubricSection({
       )}
 
       {rubrics.length === 0 ? (
-        <p>No rubric criteria added yet.</p>
+        <div>
+          <p>No rubric criteria added yet.</p>
+
+          <p>
+            Recommended:{" "}
+            <Link href={ROUTES.PROFESSOR.RUBRIC_TEMPLATES(examId)}>
+              create/apply a rubric template
+            </Link>{" "}
+            instead of adding rubrics manually question-by-question.
+          </p>
+        </div>
       ) : (
         <ol>
           {rubrics.map((rubric) => (
@@ -842,6 +829,16 @@ function RubricSection({
               <strong>
                 {rubric.criterion_name} — {formatMarks(rubric.max_marks)} marks
               </strong>
+
+              {rubric.is_template_generated ? (
+                <span style={{ marginLeft: "8px", color: "green" }}>
+                  Template-generated
+                </span>
+              ) : (
+                <span style={{ marginLeft: "8px", color: "#777" }}>
+                  Manual
+                </span>
+              )}
 
               {rubric.criterion_description && (
                 <p>{rubric.criterion_description}</p>
@@ -852,48 +849,57 @@ function RubricSection({
       )}
 
       {canEdit && (
-        <form action={createRubric} style={{ marginTop: "24px" }}>
-          <input type="hidden" name="examId" value={examId} />
-          <input type="hidden" name="questionId" value={questionId} />
+        <details style={{ marginTop: "24px" }}>
+          <summary>Advanced: add question-specific rubric manually</summary>
 
-          <div style={{ marginBottom: "12px" }}>
-            <label>Criterion Name *</label>
-            <br />
-            <input
-              name="criterionName"
-              required
-              placeholder="Example: Concept clarity"
-              style={{ width: "100%", padding: "8px" }}
-            />
-          </div>
+          <p style={{ color: "#555" }}>
+            Prefer rubric templates for repeated question types. Use this manual
+            form only when this particular question needs a custom criterion.
+          </p>
 
-          <div style={{ marginBottom: "12px" }}>
-            <label>Criterion Description</label>
-            <br />
-            <textarea
-              name="criterionDescription"
-              rows={3}
-              placeholder="Explain what the student should include for this criterion."
-              style={{ width: "100%", padding: "8px" }}
-            />
-          </div>
+          <form action={createRubric} style={{ marginTop: "16px" }}>
+            <input type="hidden" name="examId" value={examId} />
+            <input type="hidden" name="questionId" value={questionId} />
 
-          <div style={{ marginBottom: "12px" }}>
-            <label>Max Marks *</label>
-            <br />
-            <input
-              name="maxMarks"
-              type="number"
-              min="0"
-              step="0.01"
-              required
-              placeholder="Example: 2"
-              style={{ width: "100%", padding: "8px" }}
-            />
-          </div>
+            <div style={{ marginBottom: "12px" }}>
+              <label>Criterion Name *</label>
+              <br />
+              <input
+                name="criterionName"
+                required
+                placeholder="Example: Concept clarity"
+                style={{ width: "100%", padding: "8px" }}
+              />
+            </div>
 
-          <button type="submit">Add Rubric Criterion</button>
-        </form>
+            <div style={{ marginBottom: "12px" }}>
+              <label>Criterion Description</label>
+              <br />
+              <textarea
+                name="criterionDescription"
+                rows={3}
+                placeholder="Explain what the student should include for this criterion."
+                style={{ width: "100%", padding: "8px" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: "12px" }}>
+              <label>Max Marks *</label>
+              <br />
+              <input
+                name="maxMarks"
+                type="text"
+                inputMode="decimal"
+                pattern="[0-9]+([.][0-9]{1,2})?"
+                required
+                placeholder="Example: 2 or 2.50"
+                style={{ width: "100%", padding: "8px" }}
+              />
+            </div>
+
+            <button type="submit">Add Manual Rubric Criterion</button>
+          </form>
+        </details>
       )}
     </section>
   );

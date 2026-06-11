@@ -1,57 +1,60 @@
-import Link from "next/link"
-import { notFound } from "next/navigation"
-import { createRubricTemplate } from "@/features/rubrics/actions"
-import { requireProfessorOrAdmin } from "@/lib/auth"
-import { formatMarks } from "@/lib/marks"
-import { ROUTES } from "@/lib/routes"
-import { createClient } from "@/lib/supabase/server"
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import {
+  applyRubricTemplateToMatchingQuestions,
+  createRubricTemplate,
+} from "@/features/rubrics/actions";
+import { requireProfessorOrAdmin } from "@/lib/auth";
+import { formatMarks } from "@/lib/marks";
+import { ROUTES } from "@/lib/routes";
+import { createClient } from "@/lib/supabase/server";
 
 type RubricTemplatesPageProps = {
   params: Promise<{
-    examId: string
-  }>
-}
+    examId: string;
+  }>;
+};
 
 type RubricTemplateCriterion = {
-  id: string
-  criterion_order: number
-  criterion_name: string
-  criterion_description: string | null
-  max_marks: number | string
-}
+  id: string;
+  criterion_order: number;
+  criterion_name: string;
+  criterion_description: string | null;
+  max_marks: number | string;
+};
 
 type RubricTemplate = {
-  id: string
-  template_name: string
-  applies_to_question_type: string | null
-  question_category: string | null
-  total_marks: number | string
-  description: string | null
-  is_active: boolean
-  created_at: string
-  rubric_template_criteria: RubricTemplateCriterion[]
-}
+  id: string;
+  template_name: string;
+  applies_to_question_type: string | null;
+  question_category: string | null;
+  total_marks: number | string;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  rubric_template_criteria: RubricTemplateCriterion[];
+};
 
 export default async function RubricTemplatesPage({
   params,
 }: RubricTemplatesPageProps) {
-  const { examId } = await params
+  const { examId } = await params;
 
-  const { user, profile } = await requireProfessorOrAdmin()
-  const supabase = await createClient()
+  const { user, profile } = await requireProfessorOrAdmin();
+  const supabase = await createClient();
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
     .select("id, title, subject, course, batch, professor_id, status")
     .eq("id", examId)
-    .single()
+    .single();
 
   if (examError || !exam) {
-    notFound()
+    notFound();
   }
 
   if (profile.role === "professor" && exam.professor_id !== user.id) {
-    notFound()
+    notFound();
   }
 
   const { data: templates, error: templatesError } = await supabase
@@ -73,23 +76,21 @@ export default async function RubricTemplatesPage({
         criterion_description,
         max_marks
       )
-    `
+    `,
     )
     .eq("exam_id", examId)
-    .order("created_at", { ascending: false })
+    .order("created_at", { ascending: false });
 
   if (templatesError) {
-    throw new Error(templatesError.message)
+    throw new Error(templatesError.message);
   }
 
-  const rubricTemplates = (templates || []) as RubricTemplate[]
+  const rubricTemplates = (templates || []) as RubricTemplate[];
 
   return (
     <main style={{ padding: "40px" }}>
       <p>
-        <Link href={ROUTES.PROFESSOR.EXAM_DETAIL(exam.id)}>
-          ← Back to exam
-        </Link>
+        <Link href={ROUTES.PROFESSOR.EXAM_DETAIL(exam.id)}>← Back to exam</Link>
       </p>
 
       <h1>Rubric Templates</h1>
@@ -230,7 +231,7 @@ export default async function RubricTemplatesPage({
 
                 <tbody>
                   {Array.from({ length: 6 }).map((_, index) => {
-                    const rowNumber = index + 1
+                    const rowNumber = index + 1;
 
                     return (
                       <tr key={rowNumber}>
@@ -265,7 +266,7 @@ export default async function RubricTemplatesPage({
                           />
                         </td>
                       </tr>
-                    )
+                    );
                   })}
                 </tbody>
               </table>
@@ -285,11 +286,14 @@ export default async function RubricTemplatesPage({
             {rubricTemplates.map((template) => {
               const sortedCriteria = [
                 ...(template.rubric_template_criteria || []),
-              ].sort((a, b) => a.criterion_order - b.criterion_order)
+              ].sort((a, b) => a.criterion_order - b.criterion_order);
 
-              const criteriaTotal = sortedCriteria.reduce((total, criterion) => {
-                return total + Number(criterion.max_marks)
-              }, 0)
+              const criteriaTotal = sortedCriteria.reduce(
+                (total, criterion) => {
+                  return total + Number(criterion.max_marks);
+                },
+                0,
+              );
 
               return (
                 <article
@@ -367,24 +371,75 @@ export default async function RubricTemplatesPage({
                       ))}
                     </tbody>
                   </table>
+
+                                    {profile.role === "professor" &&
+                    exam.status !== "published" &&
+                    exam.status !== "archived" && (
+                      <form
+                        action={applyRubricTemplateToMatchingQuestions}
+                        style={{
+                          marginTop: "16px",
+                          borderTop: "1px solid #eee",
+                          paddingTop: "12px",
+                        }}
+                      >
+                        <input type="hidden" name="examId" value={exam.id} />
+                        <input
+                          type="hidden"
+                          name="templateId"
+                          value={template.id}
+                        />
+
+                        {!template.applies_to_question_type && (
+                          <p style={{ color: "crimson" }}>
+                            This template has no question type, so it cannot be
+                            auto-applied to matching questions.
+                          </p>
+                        )}
+
+                        {template.applies_to_question_type && (
+                          <p style={{ color: "#555" }}>
+                            This will apply the template to all{" "}
+                            <strong>{template.applies_to_question_type}</strong>{" "}
+                            questions where question marks equal{" "}
+                            <strong>{formatMarks(template.total_marks)}</strong>.
+                          </p>
+                        )}
+
+                        <label>
+                          <input name="replaceExisting" type="checkbox" />{" "}
+                          Replace existing rubrics on matching questions
+                        </label>
+
+                        <br />
+
+                        <button
+                          type="submit"
+                          disabled={!template.applies_to_question_type}
+                          style={{ marginTop: "8px" }}
+                        >
+                          Apply Template to Matching Questions
+                        </button>
+                      </form>
+                    )}
                 </article>
-              )
+              );
             })}
           </div>
         )}
       </section>
     </main>
-  )
+  );
 }
 
 const tableHeaderStyle = {
   borderBottom: "1px solid #ddd",
   padding: "8px",
   textAlign: "left" as const,
-}
+};
 
 const tableCellStyle = {
   borderBottom: "1px solid #eee",
   padding: "8px",
   verticalAlign: "top" as const,
-}
+};
