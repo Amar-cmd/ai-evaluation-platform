@@ -17,6 +17,8 @@ export const ROUTES = {
   `/professor/exams/${examId}/uploads/${uploadId}/map`,
     EXAM_REVIEW: (examId: string) => `/professor/exams/${examId}/review`,
     EXAM_FLAGS: (examId: string) => `/professor/exams/${examId}/flags`,
+    RUBRIC_TEMPLATES: (examId: string) =>
+  `/professor/exams/${examId}/rubric-templates`,
   },
 
   STUDENT: {

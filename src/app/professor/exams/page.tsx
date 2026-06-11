@@ -106,6 +106,12 @@ export default async function ProfessorExamsPage() {
                     Open Exam
                   </Link>
                 </p>
+
+                <p>
+                  <Link href={ROUTES.PROFESSOR.RUBRIC_TEMPLATES(exam.id)}>
+                    Manage Rubric Templates
+                  </Link>
+                </p>
               </article>
             ))}
           </div>
