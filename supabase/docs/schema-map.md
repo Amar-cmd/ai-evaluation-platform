@@ -616,3 +616,35 @@ Additional fields on `questions`:
 - `expected_answer_format`: optional expected answer style such as one_line, paragraph, case_analysis, essay.
 
 Subjective manual question creation remains supported. Objective question options will be added in a later step.
+
+## Rubric Templates
+
+Rubric templates reduce repeated rubric creation.
+
+Tables:
+
+- `rubric_templates`
+- `rubric_template_criteria`
+
+Purpose:
+
+Professor can create a small number of exam-level/category-level templates, such as:
+
+- Case Based 15 Marks
+- Long Answer 10 Marks
+- Essay 20 Marks
+
+These templates are source templates only. The existing `rubrics` table remains the final question-level rubric source used by the AI evaluation pipeline.
+
+Future flow:
+
+1. Professor creates rubric template.
+2. Professor applies template to matching questions.
+3. Template criteria are copied/materialized into `rubrics`.
+4. AI evaluation continues using `rubrics`.
+
+Security:
+
+- Professors can access templates only for their own exams.
+- Admins can access all templates.
+- Students have no access to rubric templates.
