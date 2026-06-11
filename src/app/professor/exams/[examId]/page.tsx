@@ -255,9 +255,26 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
           <strong>Current Exam Status:</strong> {exam.status}
         </p>
 
+        <p>
+          <strong>AI-evaluable Questions:</strong>{" "}
+          {readiness.evaluableQuestionCount}
+        </p>
+
+        <p>
+          <strong>Ready for AI:</strong> {readiness.readyQuestionCount} /{" "}
+          {readiness.evaluableQuestionCount}
+        </p>
+
+        {readiness.skippedQuestionCount > 0 && (
+          <p>
+            <strong>Skipped Questions:</strong> {readiness.skippedQuestionCount}
+          </p>
+        )}
+
         {readiness.isReady ? (
           <p style={{ color: "green" }}>
-            All questions have approved model answers and matching rubrics.
+            All AI-evaluable questions have approved model answers and matching
+            rubrics.
           </p>
         ) : (
           <>
@@ -274,6 +291,12 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                 </li>
               ))}
             </ul>
+
+            <p style={{ marginTop: "12px" }}>
+              <Link href={ROUTES.PROFESSOR.RUBRIC_TEMPLATES(exam.id)}>
+                Manage Rubric Templates
+              </Link>
+            </p>
           </>
         )}
 
@@ -294,18 +317,49 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                   <strong>Question {summary.questionNo}</strong>
 
                   <p>
-                    Model Answer:{" "}
+                    <strong>Question Type:</strong> {summary.questionType}
+                  </p>
+
+                  <p>
+                    <strong>AI Evaluation:</strong>{" "}
+                    {summary.isAiEvaluable ? "Included" : "Skipped"}
+                  </p>
+
+                  <p>
+                    <strong>Model Answer:</strong>{" "}
                     {summary.modelAnswerReady ? "Ready" : "Not Ready"}
                   </p>
 
                   <p>
-                    Rubrics: {summary.rubricCount} criteria, total{" "}
-                    {summary.rubricTotal} / {summary.questionMaxMarks}
+                    <strong>Rubrics:</strong> {summary.rubricCount} criteria,
+                    total {summary.rubricTotal} / {summary.questionMaxMarks}
                   </p>
 
                   <p>
-                    Rubric Marks:{" "}
+                    <strong>Rubric Source:</strong> {summary.rubricSourceLabel}
+                  </p>
+
+                  {summary.templateGeneratedRubricCount > 0 && (
+                    <p style={{ color: "green" }}>
+                      {summary.templateGeneratedRubricCount} criteria generated
+                      from template.
+                    </p>
+                  )}
+
+                  {summary.manualRubricCount > 0 && (
+                    <p style={{ color: "#555" }}>
+                      {summary.manualRubricCount} manually added criteria.
+                    </p>
+                  )}
+
+                  <p>
+                    <strong>Rubric Marks:</strong>{" "}
                     {summary.rubricMarksMatch ? "Matching" : "Not Matching"}
+                  </p>
+
+                  <p>
+                    <strong>Ready for AI:</strong>{" "}
+                    {summary.isReadyForAi ? "Yes" : "No"}
                   </p>
                 </div>
               ))}
@@ -605,7 +659,6 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
               </select>
             </div>
 
-
             <div style={{ marginBottom: "12px" }}>
               <label>
                 <input name="isAiEvaluable" type="checkbox" defaultChecked />{" "}
@@ -835,9 +888,7 @@ function RubricSection({
                   Template-generated
                 </span>
               ) : (
-                <span style={{ marginLeft: "8px", color: "#777" }}>
-                  Manual
-                </span>
+                <span style={{ marginLeft: "8px", color: "#777" }}>Manual</span>
               )}
 
               {rubric.criterion_description && (
