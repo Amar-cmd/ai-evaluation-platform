@@ -648,3 +648,58 @@ Security:
 - Professors can access templates only for their own exams.
 - Admins can access all templates.
 - Students have no access to rubric templates.
+
+## student_answer_cells
+
+Stages individual non-empty response cells from uploaded student answer files.
+
+Purpose:
+
+For randomized/question-bank style exams, global response-column mapping is not reliable because the same response column can represent different questions for different students.
+
+Example:
+
+- Student A `response2` may be an objective answer.
+- Student B `response2` may be a subjective answer.
+- Student C `response2` may be a case-based answer.
+
+Therefore, the system stages each answer cell separately.
+
+Workflow:
+
+1. Upload is parsed into `answer_upload_rows`.
+2. Non-empty response fields are converted into `student_answer_cells`.
+3. Smart mapping suggests a matching question.
+4. Professor reviews confidence groups.
+5. Confirmed cells are materialized into `student_answers`.
+
+Important fields:
+
+- `exam_id`
+- `upload_id`
+- `source_row_index`
+- `response_column`
+- `answer_text`
+- `suggested_question_id`
+- `final_question_id`
+- `mapping_status`
+- `mapping_source`
+- `mapping_confidence`
+- `mapping_reason`
+- `imported_student_answer_id`
+
+Mapping statuses:
+
+- `unmapped`
+- `suggested`
+- `confirmed`
+- `ignored`
+- `imported`
+- `conflict`
+- `failed`
+
+Security:
+
+- Professors can access cells only for their own exams.
+- Admins can access all cells.
+- Students cannot access answer cells.
