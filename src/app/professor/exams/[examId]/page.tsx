@@ -8,7 +8,10 @@ import {
   createEvaluationJobAndSeedPending,
   runMockAiEvaluationForExam,
 } from "@/features/exams/actions";
-import { generateAnswerCellsForUpload } from "@/features/answer-cells/actions";
+import {
+  generateAnswerCellsForUpload,
+  generateMappingSuggestionsForUpload,
+} from "@/features/answer-cells/actions";
 import { checkExamRubricReadiness } from "@/features/exams/readiness";
 import { requireProfessorOrAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
@@ -125,7 +128,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
     uploadIds.length > 0
       ? await supabase
           .from("student_answer_cells")
-          .select("upload_id")
+          .select("upload_id, mapping_status, mapping_confidence")
           .in("upload_id", uploadIds)
       : { data: [], error: null };
 
@@ -144,6 +147,57 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
       cell.upload_id,
       (answerCellCounts.get(cell.upload_id) || 0) + 1,
     );
+  }
+
+  const answerCellMappingStats = new Map<
+    string,
+    {
+      unmapped: number;
+      suggested: number;
+      high: number;
+      medium: number;
+      low: number;
+      conflict: number;
+      failed: number;
+      confirmed: number;
+      ignored: number;
+      imported: number;
+    }
+  >();
+
+  for (const upload of answerUploads) {
+    answerCellMappingStats.set(upload.id, {
+      unmapped: 0,
+      suggested: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+      conflict: 0,
+      failed: 0,
+      confirmed: 0,
+      ignored: 0,
+      imported: 0,
+    });
+  }
+
+  for (const cell of answerCells || []) {
+    const stats = answerCellMappingStats.get(cell.upload_id);
+
+    if (!stats) {
+      continue;
+    }
+
+    if (cell.mapping_status in stats) {
+      stats[cell.mapping_status as keyof typeof stats] += 1;
+    }
+
+    if (
+      cell.mapping_status === "suggested" &&
+      cell.mapping_confidence &&
+      cell.mapping_confidence in stats
+    ) {
+      stats[cell.mapping_confidence as keyof typeof stats] += 1;
+    }
   }
 
   const { count: importedAnswerCount, error: importedAnswerCountError } =
@@ -463,6 +517,62 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                   {answerCellCounts.get(upload.id) || 0}
                 </p>
 
+                {(answerCellCounts.get(upload.id) || 0) > 0 && (
+                  <div
+                    style={{
+                      border: "1px solid #eee",
+                      borderRadius: "6px",
+                      padding: "10px",
+                      marginTop: "8px",
+                    }}
+                  >
+                    <p>
+                      <strong>Mapping Suggestions:</strong>
+                    </p>
+
+                    <p>
+                      Unmapped:{" "}
+                      {answerCellMappingStats.get(upload.id)?.unmapped || 0} |{" "}
+                      Suggested:{" "}
+                      {answerCellMappingStats.get(upload.id)?.suggested || 0} |{" "}
+                      Conflict:{" "}
+                      {answerCellMappingStats.get(upload.id)?.conflict || 0} |
+                      Failed:{" "}
+                      {answerCellMappingStats.get(upload.id)?.failed || 0}
+                    </p>
+
+                    <p>
+                      High: {answerCellMappingStats.get(upload.id)?.high || 0} |
+                      Medium:{" "}
+                      {answerCellMappingStats.get(upload.id)?.medium || 0} |
+                      Low: {answerCellMappingStats.get(upload.id)?.low || 0}
+                    </p>
+
+                    <p>
+                      Confirmed:{" "}
+                      {answerCellMappingStats.get(upload.id)?.confirmed || 0} |{" "}
+                      Ignored:{" "}
+                      {answerCellMappingStats.get(upload.id)?.ignored || 0} |
+                      Imported:{" "}
+                      {answerCellMappingStats.get(upload.id)?.imported || 0}
+                    </p>
+                  </div>
+                )}
+
+                {upload.status === "mapping_pending" && (
+                  <p style={{ marginTop: "12px" }}>
+                    <Link
+                      href={ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(
+                        exam.id,
+                        upload.id,
+                      )}
+                    >
+                      Legacy fixed-paper mapping: map response columns to
+                      questions
+                    </Link>
+                  </p>
+                )}
+
                 <p>
                   <strong>Detected Response Columns:</strong>{" "}
                   {upload.response_columns.length > 0
@@ -488,19 +598,6 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                   </pre>
                 )}
 
-                {upload.status === "mapping_pending" && (
-                  <p style={{ marginTop: "12px" }}>
-                    <Link
-                      href={ROUTES.PROFESSOR.MAP_ANSWER_UPLOAD(
-                        exam.id,
-                        upload.id,
-                      )}
-                    >
-                      Map response columns to questions
-                    </Link>
-                  </p>
-                )}
-
                 {profile.role === "professor" &&
                   exam.status !== "published" &&
                   exam.status !== "archived" &&
@@ -518,6 +615,39 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                         Creates one internal answer cell for every non-empty
                         response column. Existing unimported cells for this
                         upload will be regenerated.
+                      </p>
+                    </form>
+                  )}
+
+                {profile.role === "professor" &&
+                  exam.status !== "published" &&
+                  exam.status !== "archived" &&
+                  (answerCellCounts.get(upload.id) || 0) > 0 && (
+                    <form
+                      action={generateMappingSuggestionsForUpload}
+                      style={{ marginTop: "12px" }}
+                    >
+                      <input type="hidden" name="examId" value={exam.id} />
+                      <input type="hidden" name="uploadId" value={upload.id} />
+
+                      <label>
+                        <input
+                          name="retryExistingSuggestions"
+                          type="checkbox"
+                        />{" "}
+                        Regenerate existing suggestions too
+                      </label>
+
+                      <br />
+
+                      <button type="submit" style={{ marginTop: "8px" }}>
+                        Generate Mapping Suggestions
+                      </button>
+
+                      <p style={{ fontSize: "13px", color: "#555" }}>
+                        Runs conservative heuristic mapping.
+                        Short/objective-looking answers will be marked for
+                        review instead of being aggressively mapped.
                       </p>
                     </form>
                   )}
@@ -710,17 +840,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
               </select>
             </div>
 
-            <div style={{ marginBottom: "12px" }}>
-              <label>
-                <input name="isAiEvaluable" type="checkbox" defaultChecked />{" "}
-                Include this question in AI subjective evaluation
-              </label>
-
-              <p style={{ fontSize: "13px", color: "#555" }}>
-                Keep this checked for subjective/case/essay answers. Objective
-                questions will be handled separately in upcoming steps.
-              </p>
-            </div>
+            
 
             <div style={{ marginBottom: "16px" }}>
               <label>Max Marks *</label>

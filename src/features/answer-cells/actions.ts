@@ -7,6 +7,12 @@ import { requireRole } from "@/lib/auth";
 import { ROUTES } from "@/lib/routes";
 import { createClient } from "@/lib/supabase/server";
 
+import {
+  isShortOrObjectiveLookingAnswer,
+  validateMappingOutput,
+  type MappingCandidateQuestion,
+} from "@/features/answer-cells/mapping";
+
 type AnswerUploadForCells = {
   id: string;
   exam_id: string;
@@ -36,6 +42,35 @@ type AnswerCellInsert = {
   word_count: number;
   character_count: number;
   mapping_status: "unmapped";
+};
+
+type AnswerCellForSuggestion = {
+  id: string;
+  response_column: string;
+  answer_text: string;
+  word_count: number;
+  character_count: number;
+  mapping_status: string;
+};
+
+type QuestionForSuggestion = {
+  id: string;
+  question_no: string;
+  question_text: string;
+  question_type: string;
+  max_marks: number | string;
+  model_answer: string | null;
+  is_ai_evaluable?: boolean | null;
+};
+
+type MappingSuggestionResult = {
+  cellId: string;
+  suggestedQuestionId: string | null;
+  mappingStatus: "suggested" | "conflict" | "failed";
+  mappingSource: "heuristic";
+  mappingConfidence: "high" | "medium" | "low" | "unknown";
+  mappingConfidenceScore: number | null;
+  mappingReason: string;
 };
 
 export async function generateAnswerCellsForUpload(formData: FormData) {
@@ -271,4 +306,390 @@ function chunkArray<T>(items: T[], size: number) {
   }
 
   return chunks;
+}
+
+export async function generateMappingSuggestionsForUpload(formData: FormData) {
+  const examId = String(formData.get("examId") || "");
+  const uploadId = String(formData.get("uploadId") || "");
+  const retryExistingSuggestions =
+    formData.get("retryExistingSuggestions") === "on";
+
+  if (!examId) {
+    throw new Error("Exam ID is required.");
+  }
+
+  if (!uploadId) {
+    throw new Error("Upload ID is required.");
+  }
+
+  const { user } = await requireRole(["professor"]);
+  const supabase = await createClient();
+
+  const { data: exam, error: examError } = await supabase
+    .from("exams")
+    .select("id, professor_id, status, title, subject")
+    .eq("id", examId)
+    .single();
+
+  if (examError || !exam) {
+    throw new Error("Exam not found or you do not have access to it.");
+  }
+
+  if (exam.professor_id !== user.id) {
+    throw new Error("You are not allowed to map answer cells for this exam.");
+  }
+
+  if (exam.status === "published" || exam.status === "archived") {
+    throw new Error(
+      "Cannot generate mapping suggestions for published or archived exams.",
+    );
+  }
+
+  const { data: upload, error: uploadError } = await supabase
+    .from("answer_uploads")
+    .select("id, exam_id")
+    .eq("id", uploadId)
+    .eq("exam_id", examId)
+    .single();
+
+  if (uploadError || !upload) {
+    throw new Error("Answer upload not found.");
+  }
+
+  const { data: questions, error: questionsError } = await supabase
+    .from("questions")
+    .select(
+      "id, question_no, question_text, question_type, max_marks, model_answer, is_ai_evaluable",
+    )
+    .eq("exam_id", examId)
+    .order("question_order", { ascending: true });
+
+  if (questionsError) {
+    throw new Error(questionsError.message);
+  }
+
+  const candidateQuestions = ((questions || []) as QuestionForSuggestion[])
+    .filter((question) => question.is_ai_evaluable !== false)
+    .map(toMappingCandidateQuestion);
+
+  if (candidateQuestions.length === 0) {
+    throw new Error("No AI-evaluable candidate questions found for this exam.");
+  }
+
+  const statusesToMap = retryExistingSuggestions
+    ? ["unmapped", "suggested", "conflict", "failed"]
+    : ["unmapped", "conflict", "failed"];
+
+  const { data: cells, error: cellsError } = await supabase
+    .from("student_answer_cells")
+    .select(
+      "id, response_column, answer_text, word_count, character_count, mapping_status",
+    )
+    .eq("exam_id", examId)
+    .eq("upload_id", uploadId)
+    .in("mapping_status", statusesToMap)
+    .order("source_row_index", { ascending: true })
+    .order("response_column", { ascending: true })
+    .limit(1000);
+
+  if (cellsError) {
+    throw new Error(cellsError.message);
+  }
+
+  const answerCells = (cells || []) as AnswerCellForSuggestion[];
+
+  if (answerCells.length === 0) {
+    throw new Error(
+      retryExistingSuggestions
+        ? "No answer cells available for mapping suggestions."
+        : "No unmapped answer cells found. Enable retry existing suggestions if you want to regenerate suggestions.",
+    );
+  }
+
+  const results: MappingSuggestionResult[] = [];
+
+  for (const cell of answerCells) {
+    results.push(generateHeuristicMappingSuggestion(cell, candidateQuestions));
+  }
+
+  for (const result of results) {
+    const { error: updateError } = await supabase
+      .from("student_answer_cells")
+      .update({
+        suggested_question_id: result.suggestedQuestionId,
+        mapping_status: result.mappingStatus,
+        mapping_source: result.mappingSource,
+        mapping_confidence: result.mappingConfidence,
+        mapping_confidence_score: result.mappingConfidenceScore,
+        mapping_reason: result.mappingReason,
+        final_question_id: null,
+        confirmed_by: null,
+        confirmed_at: null,
+      })
+      .eq("id", result.cellId)
+      .eq("exam_id", examId)
+      .eq("upload_id", uploadId);
+
+    if (updateError) {
+      throw new Error(updateError.message);
+    }
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+
+  redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+}
+// ===============
+// FUNCTIONS
+// ===============
+function generateHeuristicMappingSuggestion(
+  cell: AnswerCellForSuggestion,
+  candidateQuestions: MappingCandidateQuestion[],
+): MappingSuggestionResult {
+  try {
+    const answerCellForValidation = {
+      id: cell.id,
+      responseColumn: cell.response_column,
+      answerText: cell.answer_text,
+      wordCount: cell.word_count,
+      characterCount: cell.character_count,
+    };
+
+    if (isShortOrObjectiveLookingAnswer(answerCellForValidation)) {
+      const validatedOutput = validateMappingOutput(
+        {
+          suggested_question_id: null,
+          confidence: "low",
+          reason:
+            "This answer is very short or objective-looking, so heuristic mapping did not assign it to a subjective question. It should be reviewed or ignored later.",
+          should_ignore: false,
+        },
+        candidateQuestions.map((question) => question.id),
+      );
+
+      return {
+        cellId: cell.id,
+        suggestedQuestionId: validatedOutput.suggestedQuestionId,
+        mappingStatus: "conflict",
+        mappingSource: "heuristic",
+        mappingConfidence: validatedOutput.confidence,
+        mappingConfidenceScore: 0,
+        mappingReason: validatedOutput.reason,
+      };
+    }
+
+    const scoredCandidates = candidateQuestions
+      .map((question) => {
+        return {
+          question,
+          score: calculateQuestionMatchScore(cell.answer_text, question),
+        };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const best = scoredCandidates[0];
+    const secondBest = scoredCandidates[1];
+
+    if (!best || best.score < 0.08) {
+      const validatedOutput = validateMappingOutput(
+        {
+          suggested_question_id: null,
+          confidence: "low",
+          reason:
+            "No candidate question had enough keyword overlap with this answer. Needs professor review.",
+          should_ignore: false,
+        },
+        candidateQuestions.map((question) => question.id),
+      );
+
+      return {
+        cellId: cell.id,
+        suggestedQuestionId: validatedOutput.suggestedQuestionId,
+        mappingStatus: "conflict",
+        mappingSource: "heuristic",
+        mappingConfidence: validatedOutput.confidence,
+        mappingConfidenceScore: best?.score ?? 0,
+        mappingReason: validatedOutput.reason,
+      };
+    }
+
+    const margin = best.score - (secondBest?.score ?? 0);
+    const confidence = getHeuristicConfidence(best.score, margin);
+
+    const validatedOutput = validateMappingOutput(
+      {
+        suggested_question_id: best.question.id,
+        confidence,
+        reason: buildHeuristicReason(best.question, best.score, margin),
+        should_ignore: false,
+      },
+      candidateQuestions.map((question) => question.id),
+    );
+
+    return {
+      cellId: cell.id,
+      suggestedQuestionId: validatedOutput.suggestedQuestionId,
+      mappingStatus:
+        validatedOutput.confidence === "low" ? "conflict" : "suggested",
+      mappingSource: "heuristic",
+      mappingConfidence: validatedOutput.confidence,
+      mappingConfidenceScore: Number(best.score.toFixed(4)),
+      mappingReason: validatedOutput.reason,
+    };
+  } catch (error) {
+    return {
+      cellId: cell.id,
+      suggestedQuestionId: null,
+      mappingStatus: "failed",
+      mappingSource: "heuristic",
+      mappingConfidence: "unknown",
+      mappingConfidenceScore: null,
+      mappingReason:
+        error instanceof Error
+          ? error.message
+          : "Unknown mapping suggestion error.",
+    };
+  }
+}
+
+function toMappingCandidateQuestion(
+  question: QuestionForSuggestion,
+): MappingCandidateQuestion {
+  return {
+    id: question.id,
+    questionNo: question.question_no,
+    questionText: question.question_text,
+    questionType: question.question_type,
+    maxMarks: question.max_marks,
+    modelAnswer: question.model_answer,
+  };
+}
+
+function calculateQuestionMatchScore(
+  answerText: string,
+  question: MappingCandidateQuestion,
+) {
+  const answerTokens = tokenizeForMapping(answerText);
+
+  const questionTokens = tokenizeForMapping(
+    [
+      question.questionNo,
+      question.questionText,
+      question.questionType,
+      question.modelAnswer || "",
+    ].join(" "),
+  );
+
+  if (answerTokens.size === 0 || questionTokens.size === 0) {
+    return 0;
+  }
+
+  let overlapScore = 0;
+
+  for (const token of questionTokens) {
+    if (answerTokens.has(token)) {
+      overlapScore += getTokenWeight(token);
+    }
+  }
+
+  const normalizer = Math.sqrt(answerTokens.size * questionTokens.size);
+
+  return overlapScore / normalizer;
+}
+
+function tokenizeForMapping(value: string) {
+  const stopWords = new Set([
+    "the",
+    "and",
+    "or",
+    "a",
+    "an",
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "with",
+    "by",
+    "as",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "their",
+    "there",
+    "from",
+    "at",
+    "into",
+    "can",
+    "could",
+    "should",
+    "would",
+    "will",
+    "shall",
+    "may",
+    "might",
+    "about",
+    "case",
+    "answer",
+    "explain",
+    "discuss",
+    "write",
+    "what",
+    "why",
+    "how",
+  ]);
+
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9₹]+/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3)
+    .filter((token) => !stopWords.has(token));
+
+  return new Set(normalized);
+}
+
+function getTokenWeight(token: string) {
+  if (token.length >= 10) {
+    return 2.5;
+  }
+
+  if (token.length >= 7) {
+    return 2;
+  }
+
+  return 1;
+}
+
+function getHeuristicConfidence(score: number, margin: number) {
+  if (score >= 0.24 && margin >= 0.04) {
+    return "high";
+  }
+
+  if (score >= 0.14 && margin >= 0.02) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function buildHeuristicReason(
+  question: MappingCandidateQuestion,
+  score: number,
+  margin: number,
+) {
+  return `Heuristic keyword overlap suggests this answer best matches ${question.questionNo}. Match score: ${score.toFixed(
+    4,
+  )}, margin over next candidate: ${margin.toFixed(4)}.`;
 }
