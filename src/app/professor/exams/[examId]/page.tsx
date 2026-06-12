@@ -8,7 +8,7 @@ import {
   createEvaluationJobAndSeedPending,
   runMockAiEvaluationForExam,
 } from "@/features/exams/actions";
-
+import { generateAnswerCellsForUpload } from "@/features/answer-cells/actions";
 import { checkExamRubricReadiness } from "@/features/exams/readiness";
 import { requireProfessorOrAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
@@ -118,6 +118,31 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
     uploadRowCounts.set(
       row.upload_id,
       (uploadRowCounts.get(row.upload_id) || 0) + 1,
+    );
+  }
+
+  const { data: answerCells, error: answerCellsError } =
+    uploadIds.length > 0
+      ? await supabase
+          .from("student_answer_cells")
+          .select("upload_id")
+          .in("upload_id", uploadIds)
+      : { data: [], error: null };
+
+  if (answerCellsError) {
+    throw new Error(answerCellsError.message);
+  }
+
+  const answerCellCounts = new Map<string, number>();
+
+  for (const upload of answerUploads) {
+    answerCellCounts.set(upload.id, 0);
+  }
+
+  for (const cell of answerCells || []) {
+    answerCellCounts.set(
+      cell.upload_id,
+      (answerCellCounts.get(cell.upload_id) || 0) + 1,
     );
   }
 
@@ -434,6 +459,11 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                 </p>
 
                 <p>
+                  <strong>Answer Cells:</strong>{" "}
+                  {answerCellCounts.get(upload.id) || 0}
+                </p>
+
+                <p>
                   <strong>Detected Response Columns:</strong>{" "}
                   {upload.response_columns.length > 0
                     ? upload.response_columns.join(", ")
@@ -470,6 +500,27 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                     </Link>
                   </p>
                 )}
+
+                {profile.role === "professor" &&
+                  exam.status !== "published" &&
+                  exam.status !== "archived" &&
+                  (uploadRowCounts.get(upload.id) || 0) > 0 && (
+                    <form
+                      action={generateAnswerCellsForUpload}
+                      style={{ marginTop: "12px" }}
+                    >
+                      <input type="hidden" name="examId" value={exam.id} />
+                      <input type="hidden" name="uploadId" value={upload.id} />
+
+                      <button type="submit">Generate Answer Cells</button>
+
+                      <p style={{ fontSize: "13px", color: "#555" }}>
+                        Creates one internal answer cell for every non-empty
+                        response column. Existing unimported cells for this
+                        upload will be regenerated.
+                      </p>
+                    </form>
+                  )}
 
                 {upload.status === "mapped" && (
                   <div style={{ marginTop: "12px" }}>
