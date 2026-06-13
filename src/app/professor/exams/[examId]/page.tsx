@@ -559,6 +559,19 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                   </div>
                 )}
 
+                {(answerCellCounts.get(upload.id) || 0) > 0 && (
+                  <p style={{ marginTop: "12px" }}>
+                    <Link
+                      href={ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(
+                        exam.id,
+                        upload.id,
+                      )}
+                    >
+                      Review Smart Mapping
+                    </Link>
+                  </p>
+                )}
+
                 {upload.status === "mapping_pending" && (
                   <p style={{ marginTop: "12px" }}>
                     <Link
@@ -839,8 +852,6 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                 <option value="other">Other</option>
               </select>
             </div>
-
-            
 
             <div style={{ marginBottom: "16px" }}>
               <label>Max Marks *</label>

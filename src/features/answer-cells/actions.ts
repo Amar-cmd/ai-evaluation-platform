@@ -439,6 +439,230 @@ export async function generateMappingSuggestionsForUpload(formData: FormData) {
 
   redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 }
+
+type AnswerCellForBulkAccept = {
+  id: string;
+  suggested_question_id: string | null;
+};
+
+export async function acceptHighConfidenceMappingsForUpload(
+  formData: FormData,
+) {
+  const examId = String(formData.get("examId") || "");
+  const uploadId = String(formData.get("uploadId") || "");
+
+  if (!examId) {
+    throw new Error("Exam ID is required.");
+  }
+
+  if (!uploadId) {
+    throw new Error("Upload ID is required.");
+  }
+
+  const { user } = await requireRole(["professor"]);
+  const supabase = await createClient();
+
+  await verifyProfessorOwnsExamUpload(supabase, user.id, examId, uploadId);
+
+  const { data: cells, error: cellsError } = await supabase
+    .from("student_answer_cells")
+    .select("id, suggested_question_id")
+    .eq("exam_id", examId)
+    .eq("upload_id", uploadId)
+    .eq("mapping_status", "suggested")
+    .eq("mapping_confidence", "high")
+    .not("suggested_question_id", "is", null);
+
+  if (cellsError) {
+    throw new Error(cellsError.message);
+  }
+
+  const highConfidenceCells = (cells || []) as AnswerCellForBulkAccept[];
+
+  if (highConfidenceCells.length === 0) {
+    throw new Error("No high-confidence mapping suggestions found.");
+  }
+
+  const confirmedAt = new Date().toISOString();
+
+  for (const cell of highConfidenceCells) {
+    if (!cell.suggested_question_id) {
+      continue;
+    }
+
+    const { error: updateError } = await supabase
+      .from("student_answer_cells")
+      .update({
+        final_question_id: cell.suggested_question_id,
+        mapping_status: "confirmed",
+        confirmed_by: user.id,
+        confirmed_at: confirmedAt,
+      })
+      .eq("id", cell.id)
+      .eq("exam_id", examId)
+      .eq("upload_id", uploadId);
+
+    if (updateError) {
+      throw new Error(updateError.message);
+    }
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+  revalidatePath(ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(examId, uploadId));
+
+  redirect(ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(examId, uploadId));
+}
+
+export async function confirmAnswerCellMapping(formData: FormData) {
+  const examId = String(formData.get("examId") || "");
+  const uploadId = String(formData.get("uploadId") || "");
+  const cellId = String(formData.get("cellId") || "");
+  const questionId = String(formData.get("questionId") || "");
+  const confirmationMode = String(
+    formData.get("confirmationMode") || "manual",
+  );
+
+  if (!examId) {
+    throw new Error("Exam ID is required.");
+  }
+
+  if (!uploadId) {
+    throw new Error("Upload ID is required.");
+  }
+
+  if (!cellId) {
+    throw new Error("Answer cell ID is required.");
+  }
+
+  if (!questionId) {
+    throw new Error("Please select a question before confirming.");
+  }
+
+  const { user } = await requireRole(["professor"]);
+  const supabase = await createClient();
+
+  await verifyProfessorOwnsExamUpload(supabase, user.id, examId, uploadId);
+  await verifyQuestionBelongsToExam(supabase, examId, questionId);
+
+  const { data: cell, error: cellError } = await supabase
+    .from("student_answer_cells")
+    .select("id, mapping_status")
+    .eq("id", cellId)
+    .eq("exam_id", examId)
+    .eq("upload_id", uploadId)
+    .single();
+
+  if (cellError || !cell) {
+    throw new Error("Answer cell not found.");
+  }
+
+  if (cell.mapping_status === "imported") {
+    throw new Error("This answer cell is already imported.");
+  }
+
+  const confirmedAt = new Date().toISOString();
+
+  const { error: updateError } = await supabase
+    .from("student_answer_cells")
+    .update({
+      final_question_id: questionId,
+      mapping_status: "confirmed",
+      mapping_source: confirmationMode === "suggestion" ? "heuristic" : "professor",
+      mapping_confidence:
+        confirmationMode === "suggestion" ? undefined : "high",
+      mapping_confidence_score:
+        confirmationMode === "suggestion" ? undefined : 1,
+      mapping_reason:
+        confirmationMode === "suggestion"
+          ? undefined
+          : "Professor manually confirmed this answer cell mapping.",
+      ignore_reason: null,
+      confirmed_by: user.id,
+      confirmed_at: confirmedAt,
+    })
+    .eq("id", cellId)
+    .eq("exam_id", examId)
+    .eq("upload_id", uploadId);
+
+  if (updateError) {
+    throw new Error(updateError.message);
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+  revalidatePath(ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(examId, uploadId));
+
+  redirect(ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(examId, uploadId));
+}
+
+export async function ignoreAnswerCellMapping(formData: FormData) {
+  const examId = String(formData.get("examId") || "");
+  const uploadId = String(formData.get("uploadId") || "");
+  const cellId = String(formData.get("cellId") || "");
+  const ignoreReason =
+    String(formData.get("ignoreReason") || "").trim() ||
+    "Professor marked this answer cell as not required for subjective evaluation.";
+
+  if (!examId) {
+    throw new Error("Exam ID is required.");
+  }
+
+  if (!uploadId) {
+    throw new Error("Upload ID is required.");
+  }
+
+  if (!cellId) {
+    throw new Error("Answer cell ID is required.");
+  }
+
+  const { user } = await requireRole(["professor"]);
+  const supabase = await createClient();
+
+  await verifyProfessorOwnsExamUpload(supabase, user.id, examId, uploadId);
+
+  const { data: cell, error: cellError } = await supabase
+    .from("student_answer_cells")
+    .select("id, mapping_status")
+    .eq("id", cellId)
+    .eq("exam_id", examId)
+    .eq("upload_id", uploadId)
+    .single();
+
+  if (cellError || !cell) {
+    throw new Error("Answer cell not found.");
+  }
+
+  if (cell.mapping_status === "imported") {
+    throw new Error("This answer cell is already imported.");
+  }
+
+  const { error: updateError } = await supabase
+    .from("student_answer_cells")
+    .update({
+      final_question_id: null,
+      mapping_status: "ignored",
+      mapping_source: "professor",
+      mapping_confidence: "unknown",
+      mapping_confidence_score: null,
+      ignore_reason: ignoreReason,
+      confirmed_by: user.id,
+      confirmed_at: new Date().toISOString(),
+    })
+    .eq("id", cellId)
+    .eq("exam_id", examId)
+    .eq("upload_id", uploadId);
+
+  if (updateError) {
+    throw new Error(updateError.message);
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+  revalidatePath(ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(examId, uploadId));
+
+  redirect(ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(examId, uploadId));
+}
+
+
+
 // ===============
 // FUNCTIONS
 // ===============
@@ -692,4 +916,57 @@ function buildHeuristicReason(
   return `Heuristic keyword overlap suggests this answer best matches ${question.questionNo}. Match score: ${score.toFixed(
     4,
   )}, margin over next candidate: ${margin.toFixed(4)}.`;
+}
+
+async function verifyProfessorOwnsExamUpload(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  professorId: string,
+  examId: string,
+  uploadId: string,
+) {
+  const { data: exam, error: examError } = await supabase
+    .from("exams")
+    .select("id, professor_id, status")
+    .eq("id", examId)
+    .single();
+
+  if (examError || !exam) {
+    throw new Error("Exam not found or you do not have access to it.");
+  }
+
+  if (exam.professor_id !== professorId) {
+    throw new Error("You are not allowed to manage mappings for this exam.");
+  }
+
+  if (exam.status === "published" || exam.status === "archived") {
+    throw new Error("Cannot update mappings for published or archived exams.");
+  }
+
+  const { data: upload, error: uploadError } = await supabase
+    .from("answer_uploads")
+    .select("id, exam_id")
+    .eq("id", uploadId)
+    .eq("exam_id", examId)
+    .single();
+
+  if (uploadError || !upload) {
+    throw new Error("Answer upload not found for this exam.");
+  }
+}
+
+async function verifyQuestionBelongsToExam(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  examId: string,
+  questionId: string,
+) {
+  const { data: question, error: questionError } = await supabase
+    .from("questions")
+    .select("id")
+    .eq("id", questionId)
+    .eq("exam_id", examId)
+    .single();
+
+  if (questionError || !question) {
+    throw new Error("Selected question does not belong to this exam.");
+  }
 }
