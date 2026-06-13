@@ -5,6 +5,7 @@ import {
   acceptHighConfidenceMappingsForUpload,
   confirmAnswerCellMapping,
   ignoreAnswerCellMapping,
+  materializeConfirmedAnswerCellsForUpload,
 } from "@/features/answer-cells/actions";
 import { requireProfessorOrAdmin } from "@/lib/auth";
 import { formatMarks } from "@/lib/marks";
@@ -138,8 +139,7 @@ export default async function MappingReviewPage({
 
   const mediumOrLowSuggestions = answerCells.filter(
     (cell) =>
-      cell.mapping_status === "suggested" &&
-      cell.mapping_confidence !== "high",
+      cell.mapping_status === "suggested" && cell.mapping_confidence !== "high",
   );
 
   const confirmed = answerCells.filter(
@@ -162,9 +162,7 @@ export default async function MappingReviewPage({
   return (
     <main style={{ padding: "40px", maxWidth: "1100px" }}>
       <p>
-        <Link href={ROUTES.PROFESSOR.EXAM_DETAIL(exam.id)}>
-          ← Back to exam
-        </Link>
+        <Link href={ROUTES.PROFESSOR.EXAM_DETAIL(exam.id)}>← Back to exam</Link>
       </p>
 
       <h1>Mapping Review</h1>
@@ -222,6 +220,33 @@ export default async function MappingReviewPage({
             <button type="submit">
               Accept All High-Confidence Suggestions ({highConfidence.length})
             </button>
+          </form>
+        )}
+
+        {canEdit && confirmed.length > 0 && (
+          <form
+            action={materializeConfirmedAnswerCellsForUpload}
+            style={{ marginTop: "12px" }}
+          >
+            <input type="hidden" name="examId" value={exam.id} />
+            <input type="hidden" name="uploadId" value={upload.id} />
+
+            <label>
+              <input name="replaceExisting" type="checkbox" /> Replace existing
+              student answers for same student + question
+            </label>
+
+            <br />
+
+            <button type="submit" style={{ marginTop: "8px" }}>
+              Import Confirmed Mappings into Student Answers ({confirmed.length}
+              )
+            </button>
+
+            <p style={{ fontSize: "13px", color: "#555" }}>
+              This will convert confirmed answer cells into normalized student
+              answers. After this, the normal AI evaluation setup can continue.
+            </p>
           </form>
         )}
       </section>
@@ -406,8 +431,8 @@ function AnswerCellCard({
           <h4>Final Confirmed Question</h4>
           <p>
             <strong>{finalQuestion.question_no}</strong> —{" "}
-            {finalQuestion.question_type} — {formatMarks(finalQuestion.max_marks)}{" "}
-            marks
+            {finalQuestion.question_type} —{" "}
+            {formatMarks(finalQuestion.max_marks)} marks
           </p>
           <p>{truncateText(finalQuestion.question_text, 300)}</p>
         </section>
@@ -436,7 +461,10 @@ function AnswerCellCard({
           }}
         >
           {suggestedQuestion && (
-            <form action={confirmAnswerCellMapping} style={{ marginBottom: "12px" }}>
+            <form
+              action={confirmAnswerCellMapping}
+              style={{ marginBottom: "12px" }}
+            >
               <input type="hidden" name="examId" value={examId} />
               <input type="hidden" name="uploadId" value={uploadId} />
               <input type="hidden" name="cellId" value={cell.id} />
@@ -451,7 +479,10 @@ function AnswerCellCard({
             </form>
           )}
 
-          <form action={confirmAnswerCellMapping} style={{ marginBottom: "12px" }}>
+          <form
+            action={confirmAnswerCellMapping}
+            style={{ marginBottom: "12px" }}
+          >
             <input type="hidden" name="examId" value={examId} />
             <input type="hidden" name="uploadId" value={uploadId} />
             <input type="hidden" name="cellId" value={cell.id} />

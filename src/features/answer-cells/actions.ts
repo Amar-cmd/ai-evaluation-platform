@@ -662,6 +662,319 @@ export async function ignoreAnswerCellMapping(formData: FormData) {
 }
 
 
+type ConfirmedAnswerCellForImport = {
+  id: string;
+  upload_row_id: string | null;
+  source_row_index: number;
+  response_column: string;
+  answer_text: string;
+  raw_answer: unknown;
+  word_count: number;
+  character_count: number;
+  final_question_id: string;
+};
+
+type UploadRowForImport = {
+  id: string;
+  source_row_index: number;
+  raw_row: Record<string, unknown> | null;
+};
+
+type ExamStudentForImport = {
+  id: string;
+  source_row_index: number;
+};
+
+type ExistingStudentAnswerForImport = {
+  id: string;
+  exam_student_id: string;
+  question_id: string;
+};
+
+export async function materializeConfirmedAnswerCellsForUpload(
+  formData: FormData,
+) {
+  const examId = String(formData.get("examId") || "");
+  const uploadId = String(formData.get("uploadId") || "");
+  const replaceExisting = formData.get("replaceExisting") === "on";
+
+  if (!examId) {
+    throw new Error("Exam ID is required.");
+  }
+
+  if (!uploadId) {
+    throw new Error("Upload ID is required.");
+  }
+
+  const { user } = await requireRole(["professor"]);
+  const supabase = await createClient();
+
+  await verifyProfessorOwnsExamUpload(supabase, user.id, examId, uploadId);
+
+  const { data: confirmedCells, error: confirmedCellsError } = await supabase
+    .from("student_answer_cells")
+    .select(
+      `
+      id,
+      upload_row_id,
+      source_row_index,
+      response_column,
+      answer_text,
+      raw_answer,
+      word_count,
+      character_count,
+      final_question_id
+    `,
+    )
+    .eq("exam_id", examId)
+    .eq("upload_id", uploadId)
+    .eq("mapping_status", "confirmed")
+    .not("final_question_id", "is", null)
+    .order("source_row_index", { ascending: true })
+    .order("response_column", { ascending: true });
+
+  if (confirmedCellsError) {
+    throw new Error(confirmedCellsError.message);
+  }
+
+  const cells = (confirmedCells || []) as ConfirmedAnswerCellForImport[];
+
+  if (cells.length === 0) {
+    throw new Error("No confirmed answer cells found for import.");
+  }
+
+  const { data: uploadRows, error: uploadRowsError } = await supabase
+    .from("answer_upload_rows")
+    .select("id, source_row_index, raw_row")
+    .eq("upload_id", uploadId)
+    .order("source_row_index", { ascending: true });
+
+  if (uploadRowsError) {
+    throw new Error(uploadRowsError.message);
+  }
+
+  const typedUploadRows = (uploadRows || []) as UploadRowForImport[];
+
+  const uploadRowBySourceIndex = new Map(
+    typedUploadRows.map((row) => [row.source_row_index, row]),
+  );
+
+  const { data: existingStudents, error: existingStudentsError } =
+    await supabase
+      .from("exam_students")
+      .select("id, source_row_index")
+      .eq("exam_id", examId)
+      .eq("upload_id", uploadId);
+
+  if (existingStudentsError) {
+    throw new Error(existingStudentsError.message);
+  }
+
+  const studentsBySourceIndex = new Map<number, string>();
+
+  for (const student of (existingStudents || []) as ExamStudentForImport[]) {
+    studentsBySourceIndex.set(student.source_row_index, student.id);
+  }
+
+  const neededSourceIndexes = [...new Set(cells.map((cell) => cell.source_row_index))];
+
+  for (const sourceRowIndex of neededSourceIndexes) {
+    if (studentsBySourceIndex.has(sourceRowIndex)) {
+      continue;
+    }
+
+    const uploadRow = uploadRowBySourceIndex.get(sourceRowIndex);
+
+    if (!uploadRow) {
+      throw new Error(`Upload row not found for source row ${sourceRowIndex}.`);
+    }
+
+    const rawRow = uploadRow.raw_row || {};
+    const email = readFirstString(rawRow, [
+      "email",
+      "emailaddress",
+      "email_address",
+      "Email",
+      "Email address",
+    ]);
+
+    if (!email) {
+      throw new Error(
+        `Student email is missing in source row ${sourceRowIndex}. Cannot create exam student.`,
+      );
+    }
+
+    const profileId = await findProfileIdByEmail(supabase, email);
+
+    const { data: createdStudent, error: createStudentError } = await supabase
+      .from("exam_students")
+      .insert({
+        exam_id: examId,
+        upload_id: uploadId,
+        profile_id: profileId,
+        first_name:
+          readFirstString(rawRow, ["firstname", "first_name", "First name"]) ||
+          null,
+        last_name:
+          readFirstString(rawRow, ["lastname", "last_name", "Last name"]) ||
+          null,
+        id_number:
+          readFirstString(rawRow, [
+            "idnumber",
+            "id_number",
+            "ID number",
+            "student_id",
+            "roll_no",
+          ]) || null,
+        email,
+        source_row_index: sourceRowIndex,
+        raw_row: rawRow,
+      })
+      .select("id")
+      .single();
+
+    if (createStudentError || !createdStudent) {
+      throw new Error(
+        createStudentError?.message ||
+          `Failed to create exam student for source row ${sourceRowIndex}.`,
+      );
+    }
+
+    studentsBySourceIndex.set(sourceRowIndex, createdStudent.id);
+  }
+
+  const targetStudentIds = [...new Set([...studentsBySourceIndex.values()])];
+
+  const { data: existingAnswers, error: existingAnswersError } =
+    targetStudentIds.length > 0
+      ? await supabase
+          .from("student_answers")
+          .select("id, exam_student_id, question_id")
+          .eq("exam_id", examId)
+          .in("exam_student_id", targetStudentIds)
+      : { data: [], error: null };
+
+  if (existingAnswersError) {
+    throw new Error(existingAnswersError.message);
+  }
+
+  const existingAnswerByStudentQuestion = new Map<string, string>();
+
+  for (const answer of (existingAnswers || []) as ExistingStudentAnswerForImport[]) {
+    existingAnswerByStudentQuestion.set(
+      makeStudentQuestionKey(answer.exam_student_id, answer.question_id),
+      answer.id,
+    );
+  }
+
+  const importedAt = new Date().toISOString();
+  let importedCount = 0;
+  let replacedCount = 0;
+  let skippedCount = 0;
+
+  for (const cell of cells) {
+    const examStudentId = studentsBySourceIndex.get(cell.source_row_index);
+
+    if (!examStudentId) {
+      throw new Error(
+        `Exam student could not be resolved for source row ${cell.source_row_index}.`,
+      );
+    }
+
+    const studentQuestionKey = makeStudentQuestionKey(
+      examStudentId,
+      cell.final_question_id,
+    );
+
+    const existingAnswerId = existingAnswerByStudentQuestion.get(studentQuestionKey);
+
+    if (existingAnswerId && !replaceExisting) {
+      skippedCount += 1;
+      continue;
+    }
+
+    let studentAnswerId = existingAnswerId || null;
+
+    if (existingAnswerId && replaceExisting) {
+      const { error: updateAnswerError } = await supabase
+        .from("student_answers")
+        .update({
+          question_id: cell.final_question_id,
+          response_column: cell.response_column,
+          answer_text: cell.answer_text,
+          raw_answer: cell.raw_answer ?? null,
+          word_count: cell.word_count,
+          character_count: cell.character_count,
+        })
+        .eq("id", existingAnswerId)
+        .eq("exam_id", examId);
+
+      if (updateAnswerError) {
+        throw new Error(updateAnswerError.message);
+      }
+
+      replacedCount += 1;
+      studentAnswerId = existingAnswerId;
+    }
+
+    if (!existingAnswerId) {
+      const { data: createdAnswer, error: createAnswerError } = await supabase
+        .from("student_answers")
+        .insert({
+          exam_id: examId,
+          exam_student_id: examStudentId,
+          question_id: cell.final_question_id,
+          response_column: cell.response_column,
+          answer_text: cell.answer_text,
+          raw_answer: cell.raw_answer ?? null,
+          word_count: cell.word_count,
+          character_count: cell.character_count,
+        })
+        .select("id")
+        .single();
+
+      if (createAnswerError || !createdAnswer) {
+        throw new Error(
+          createAnswerError?.message ||
+            `Failed to create student answer for source row ${cell.source_row_index}.`,
+        );
+      }
+
+      importedCount += 1;
+      studentAnswerId = createdAnswer.id;
+      existingAnswerByStudentQuestion.set(studentQuestionKey, createdAnswer.id);
+    }
+
+    if (studentAnswerId) {
+      const { error: updateCellError } = await supabase
+        .from("student_answer_cells")
+        .update({
+          exam_student_id: examStudentId,
+          mapping_status: "imported",
+          imported_student_answer_id: studentAnswerId,
+          confirmed_at: importedAt,
+        })
+        .eq("id", cell.id)
+        .eq("exam_id", examId)
+        .eq("upload_id", uploadId);
+
+      if (updateCellError) {
+        throw new Error(updateCellError.message);
+      }
+    }
+  }
+
+  if (importedCount === 0 && replacedCount === 0 && skippedCount > 0) {
+    throw new Error(
+      `No new answers were imported. ${skippedCount} confirmed cells already had student answers. Enable replace existing answers if you want to update them.`,
+    );
+  }
+
+  revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
+  revalidatePath(ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(examId, uploadId));
+
+  redirect(ROUTES.PROFESSOR.MAPPING_REVIEW_UPLOAD(examId, uploadId));
+}
 
 // ===============
 // FUNCTIONS
@@ -969,4 +1282,46 @@ async function verifyQuestionBelongsToExam(
   if (questionError || !question) {
     throw new Error("Selected question does not belong to this exam.");
   }
+}
+
+function readFirstString(
+  rawRow: Record<string, unknown>,
+  possibleKeys: string[],
+) {
+  for (const key of possibleKeys) {
+    const value = rawRow[key];
+
+    if (value === null || value === undefined) {
+      continue;
+    }
+
+    const normalized = String(value).trim();
+
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+async function findProfileIdByEmail(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  email: string,
+) {
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("id")
+    .ilike("email", email)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return profile?.id || null;
+}
+
+function makeStudentQuestionKey(examStudentId: string, questionId: string) {
+  return `${examStudentId}::${questionId}`;
 }

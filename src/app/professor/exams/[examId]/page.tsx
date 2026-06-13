@@ -567,7 +567,7 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
                         upload.id,
                       )}
                     >
-                      Review Smart Mapping
+                      Review Smart Mapping / Import Confirmed Mappings
                     </Link>
                   </p>
                 )}
