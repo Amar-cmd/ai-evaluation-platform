@@ -801,6 +801,33 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
               </div>
             )}
 
+            <div
+              style={{
+                border: "1px solid #f0d28a",
+                background: "#fff8e1",
+                padding: "12px",
+                borderRadius: "8px",
+                marginBottom: "12px",
+              }}
+            >
+              <p style={{ marginTop: 0 }}>
+                <strong>AI Cost / Token Safety:</strong>
+              </p>
+
+              <p style={{ fontSize: "13px", color: "#555" }}>
+                This run processes only the configured batch size. Large answers
+                may be truncated for AI safety. If a real AI provider is
+                enabled, this may consume paid API credits depending on your
+                provider and model.
+              </p>
+
+              <label>
+                <input name="confirmAiCost" type="checkbox" /> I understand this
+                may use AI provider credits and that long answers may be
+                truncated safely.
+              </label>
+            </div>
+            
             <button type="submit">Run AI Evaluation Batch</button>
 
             <p style={{ fontSize: "13px", color: "#555" }}>

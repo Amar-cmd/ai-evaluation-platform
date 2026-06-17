@@ -9,6 +9,12 @@ import { checkExamRubricReadiness } from "@/features/exams/readiness";
 import { parseMarksInput } from "@/lib/marks";
 import { parseAnswerJsonText } from "@/features/uploads/parser";
 import { evaluateAnswerWithAi } from "@/features/ai/evaluation-provider";
+import {
+  addAiEvaluationSafetyToBatchSummary,
+  assertAiCostConfirmationForRun,
+  createAiBatchSafetySummary,
+  prepareAiEvaluationInputForSafety,
+} from "@/features/ai/cost-safety";
 
 export async function createExam(formData: FormData) {
   const title = String(formData.get("title") || "").trim();
@@ -275,14 +281,14 @@ export async function markExamRubricReady(formData: FormData) {
   const questionIds = questions.map((question) => question.id);
 
   const { data: rubrics, error: rubricsError } =
-  questionIds.length > 0
-    ? await supabase
-        .from("rubrics")
-        .select(
-          "id, question_id, max_marks, is_template_generated, source_template_id",
-        )
-        .in("question_id", questionIds)
-    : { data: [], error: null };
+    questionIds.length > 0
+      ? await supabase
+          .from("rubrics")
+          .select(
+            "id, question_id, max_marks, is_template_generated, source_template_id",
+          )
+          .in("question_id", questionIds)
+      : { data: [], error: null };
 
   if (rubricsError) {
     throw new Error(rubricsError.message);
@@ -1281,6 +1287,11 @@ type RubricBreakdownForAiBatchRun = {
 export async function runAiEvaluationBatchForExam(formData: FormData) {
   const examId = String(formData.get("examId") || "");
   const retryFailedOnly = formData.get("retryFailedOnly") === "on";
+  const confirmAiCost = formData.get("confirmAiCost") === "on";
+
+  assertAiCostConfirmationForRun({
+    confirmed: confirmAiCost,
+  });
 
   if (!examId) {
     throw new Error("Exam ID is required.");
@@ -1304,7 +1315,9 @@ export async function runAiEvaluationBatchForExam(formData: FormData) {
   }
 
   if (exam.status === "published" || exam.status === "archived") {
-    throw new Error("Cannot run AI evaluation for published or archived exams.");
+    throw new Error(
+      "Cannot run AI evaluation for published or archived exams.",
+    );
   }
 
   const batchSize = readAiEvaluationBatchSize();
@@ -1447,7 +1460,8 @@ export async function runAiEvaluationBatchForExam(formData: FormData) {
   }
 
   for (const breakdown of typedRubricBreakdowns) {
-    const existing = breakdownsByEvaluationId.get(breakdown.evaluation_id) || [];
+    const existing =
+      breakdownsByEvaluationId.get(breakdown.evaluation_id) || [];
     breakdownsByEvaluationId.set(breakdown.evaluation_id, [
       ...existing,
       breakdown,
@@ -1457,6 +1471,7 @@ export async function runAiEvaluationBatchForExam(formData: FormData) {
   let completedItems = 0;
   let failedItems = 0;
   const failedMessages: string[] = [];
+  const batchSafetySummary = createAiBatchSafetySummary();
 
   for (const evaluation of evaluations) {
     try {
@@ -1482,24 +1497,29 @@ export async function runAiEvaluationBatchForExam(formData: FormData) {
         throw new Error("Rubric breakdown rows are missing.");
       }
 
-      const aiResult = await evaluateAnswerWithAi({
-        examId: exam.id,
-        studentAnswerId: studentAnswer.id,
-        subject: exam.subject,
-        examTitle: exam.title,
-        questionNo: question.question_no,
-        questionText: question.question_text,
-        questionType: question.question_type,
-        maxMarks: evaluation.max_marks,
-        modelAnswer: question.model_answer,
-        studentAnswer: studentAnswer.answer_text,
-        rubrics: breakdowns.map((breakdown) => ({
-          id: breakdown.rubric_id || breakdown.id,
-          criterionName: breakdown.criterion_name,
-          criterionDescription: breakdown.criterion_description,
-          maxMarks: breakdown.max_marks,
-        })),
-      });
+      const { preparedInput, safetySnapshot } =
+        prepareAiEvaluationInputForSafety({
+          examId: exam.id,
+          studentAnswerId: studentAnswer.id,
+          subject: exam.subject,
+          examTitle: exam.title,
+          questionNo: question.question_no,
+          questionText: question.question_text,
+          questionType: question.question_type,
+          maxMarks: evaluation.max_marks,
+          modelAnswer: question.model_answer,
+          studentAnswer: studentAnswer.answer_text,
+          rubrics: breakdowns.map((breakdown) => ({
+            id: breakdown.rubric_id || breakdown.id,
+            criterionName: breakdown.criterion_name,
+            criterionDescription: breakdown.criterion_description,
+            maxMarks: breakdown.max_marks,
+          })),
+        });
+
+      addAiEvaluationSafetyToBatchSummary(batchSafetySummary, safetySnapshot);
+
+      const aiResult = await evaluateAnswerWithAi(preparedInput);
 
       const { error: updateEvaluationError } = await supabase
         .from("evaluations")
@@ -1514,7 +1534,10 @@ export async function runAiEvaluationBatchForExam(formData: FormData) {
           student_facing_justification: aiResult.studentFacingJustification,
           what_student_did_well: aiResult.whatStudentDidWell,
           what_is_missing: aiResult.whatIsMissing,
-          ai_raw_output: aiResult.rawOutput,
+          ai_raw_output: {
+            output: aiResult.rawOutput,
+            safety: safetySnapshot,
+          },
           ai_provider: aiResult.provider,
           ai_model: aiResult.model,
           ai_error_message: null,
@@ -1613,7 +1636,15 @@ export async function runAiEvaluationBatchForExam(formData: FormData) {
       failed_items: failedItems,
       completed_at: completedAt,
       error_message:
-        failedMessages.length > 0 ? failedMessages.slice(0, 10).join("\n") : null,
+        failedMessages.length > 0
+          ? failedMessages.slice(0, 10).join("\n")
+          : null,
+      job_metadata: {
+        source: "safe_ai_batch_runner_v2",
+        batch_size: batchSize,
+        retry_failed_only: retryFailedOnly,
+        safety: batchSafetySummary,
+      },
     })
     .eq("id", job.id)
     .eq("exam_id", examId);
@@ -1653,19 +1684,19 @@ function readExamMode(value: FormDataEntryValue | null) {
 
 function readIsAiEvaluable(
   questionType: string,
-  value: FormDataEntryValue | null
+  value: FormDataEntryValue | null,
 ) {
   if (questionType === "objective") {
-    return false
+    return false;
   }
 
   if (value === null) {
-    return true
+    return true;
   }
 
-  const normalized = String(value).toLowerCase()
+  const normalized = String(value).toLowerCase();
 
-  return normalized === "true" || normalized === "on" || normalized === "1"
+  return normalized === "true" || normalized === "on" || normalized === "1";
 }
 
 function readAiEvaluationBatchSize() {
