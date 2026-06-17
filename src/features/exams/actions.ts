@@ -8,7 +8,7 @@ import { ROUTES } from "@/lib/routes";
 import { checkExamRubricReadiness } from "@/features/exams/readiness";
 import { parseMarksInput } from "@/lib/marks";
 import { parseAnswerJsonText } from "@/features/uploads/parser";
-import { evaluateAnswerWithAi } from "@/features/evaluations/ai-provider";
+import { evaluateAnswerWithAi } from "@/features/ai/evaluation-provider";
 
 export async function createExam(formData: FormData) {
   const title = String(formData.get("title") || "").trim();
@@ -263,7 +263,9 @@ export async function markExamRubricReady(formData: FormData) {
 
   const { data: questions, error: questionsError } = await supabase
     .from("questions")
-    .select("id, question_no, max_marks, model_answer, model_answer_status")
+    .select(
+      "id, question_no, question_type, max_marks, model_answer, model_answer_status, is_ai_evaluable",
+    )
     .eq("exam_id", examId);
 
   if (questionsError) {
@@ -273,12 +275,14 @@ export async function markExamRubricReady(formData: FormData) {
   const questionIds = questions.map((question) => question.id);
 
   const { data: rubrics, error: rubricsError } =
-    questionIds.length > 0
-      ? await supabase
-          .from("rubrics")
-          .select("question_id, max_marks")
-          .in("question_id", questionIds)
-      : { data: [], error: null };
+  questionIds.length > 0
+    ? await supabase
+        .from("rubrics")
+        .select(
+          "id, question_id, max_marks, is_template_generated, source_template_id",
+        )
+        .in("question_id", questionIds)
+    : { data: [], error: null };
 
   if (rubricsError) {
     throw new Error(rubricsError.message);
@@ -977,9 +981,11 @@ type StudentAnswerForEvaluationSeed = {
 type QuestionForEvaluationSeed = {
   id: string;
   question_no: string;
+  question_type: string;
   max_marks: number | string;
   model_answer: string | null;
   model_answer_status: string;
+  is_ai_evaluable?: boolean | null;
 };
 
 type RubricForEvaluationSeed = {
@@ -1023,7 +1029,9 @@ export async function createEvaluationJobAndSeedPending(formData: FormData) {
 
   const { data: questions, error: questionsError } = await supabase
     .from("questions")
-    .select("id, question_no, max_marks, model_answer, model_answer_status")
+    .select(
+      "id, question_no, question_type, max_marks, model_answer, model_answer_status, is_ai_evaluable",
+    )
     .eq("exam_id", examId)
     .order("question_order", { ascending: true });
 
@@ -1233,14 +1241,18 @@ export async function createEvaluationJobAndSeedPending(formData: FormData) {
 }
 
 // ---
-type EvaluationForMockAiRun = {
+// ======================
+// SAFE AI BATCH RUNNER TYPES
+// ======================
+
+type EvaluationForAiBatchRun = {
   id: string;
   student_answer_id: string;
-  ai_job_id: string | null;
   max_marks: number | string;
+  ai_attempt_count: number | null;
 };
 
-type StudentAnswerForMockAiRun = {
+type StudentAnswerForAiBatchRun = {
   id: string;
   question_id: string;
   answer_text: string;
@@ -1248,36 +1260,38 @@ type StudentAnswerForMockAiRun = {
   character_count: number;
 };
 
-type QuestionForMockAiRun = {
+type QuestionForAiBatchRun = {
   id: string;
   question_no: string;
   question_text: string;
+  question_type: string;
   max_marks: number | string;
   model_answer: string | null;
 };
 
-type RubricBreakdownForMockAiRun = {
+type RubricBreakdownForAiBatchRun = {
   id: string;
   evaluation_id: string;
+  rubric_id: string | null;
   criterion_name: string;
   criterion_description: string | null;
   max_marks: number | string;
 };
 
-export async function runMockAiEvaluationForExam(formData: FormData) {
+export async function runAiEvaluationBatchForExam(formData: FormData) {
   const examId = String(formData.get("examId") || "");
+  const retryFailedOnly = formData.get("retryFailedOnly") === "on";
 
   if (!examId) {
     throw new Error("Exam ID is required.");
   }
 
   const { user } = await requireRole(["professor"]);
-
   const supabase = await createClient();
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
-    .select("id, professor_id, status, subject, course")
+    .select("id, professor_id, status, title, subject, course")
     .eq("id", examId)
     .single();
 
@@ -1290,76 +1304,63 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
   }
 
   if (exam.status === "published" || exam.status === "archived") {
-    throw new Error(
-      "Cannot run AI evaluation for published or archived exams.",
-    );
+    throw new Error("Cannot run AI evaluation for published or archived exams.");
+  }
+
+  const batchSize = readAiEvaluationBatchSize();
+
+  let evaluationsQuery = supabase
+    .from("evaluations")
+    .select("id, student_answer_id, max_marks, ai_attempt_count")
+    .eq("exam_id", examId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true })
+    .limit(batchSize);
+
+  if (retryFailedOnly) {
+    evaluationsQuery = evaluationsQuery.not("ai_error_message", "is", null);
+  } else {
+    evaluationsQuery = evaluationsQuery.is("ai_error_message", null);
   }
 
   const { data: pendingEvaluations, error: pendingEvaluationsError } =
-    await supabase
-      .from("evaluations")
-      .select("id, student_answer_id, ai_job_id, max_marks")
-      .eq("exam_id", examId)
-      .eq("status", "pending")
-      .order("created_at", { ascending: true });
+    await evaluationsQuery;
 
   if (pendingEvaluationsError) {
     throw new Error(pendingEvaluationsError.message);
   }
 
-  const typedPendingEvaluations = (pendingEvaluations ||
-    []) as EvaluationForMockAiRun[];
+  const evaluations = (pendingEvaluations || []) as EvaluationForAiBatchRun[];
 
-  if (typedPendingEvaluations.length === 0) {
-    throw new Error("No pending evaluations found.");
+  if (evaluations.length === 0) {
+    throw new Error(
+      retryFailedOnly
+        ? "No failed pending evaluations found for retry."
+        : "No clean pending evaluations found for this batch.",
+    );
   }
 
-  let activeJobId =
-    typedPendingEvaluations.find((evaluation) => evaluation.ai_job_id)
-      ?.ai_job_id || null;
-
-  if (!activeJobId) {
-    const { data: createdJob, error: createJobError } = await supabase
-      .from("evaluation_jobs")
-      .insert({
-        exam_id: examId,
-        created_by: user.id,
-        status: "queued",
-        total_items: typedPendingEvaluations.length,
-        completed_items: 0,
-        failed_items: 0,
-        job_metadata: {
-          source: "mock_ai_evaluation_fallback_job",
-        },
-      })
-      .select("id")
-      .single();
-
-    if (createJobError || !createdJob) {
-      throw new Error(createJobError?.message || "Failed to create AI job.");
-    }
-
-    activeJobId = createdJob.id;
-  }
-
-  const startedAt = new Date().toISOString();
-
-  const { error: startJobError } = await supabase
+  const { data: job, error: jobError } = await supabase
     .from("evaluation_jobs")
-    .update({
+    .insert({
+      exam_id: examId,
+      created_by: user.id,
       status: "running",
-      started_at: startedAt,
-      completed_at: null,
-      total_items: typedPendingEvaluations.length,
+      total_items: evaluations.length,
       completed_items: 0,
       failed_items: 0,
-      error_message: null,
+      started_at: new Date().toISOString(),
+      job_metadata: {
+        source: "safe_ai_batch_runner_v2",
+        batch_size: batchSize,
+        retry_failed_only: retryFailedOnly,
+      },
     })
-    .eq("id", activeJobId)
-    .eq("exam_id", examId);
+    .select("id")
+    .single();
 
-  if (startJobError) {
-    throw new Error(startJobError.message);
+  if (jobError || !job) {
+    throw new Error(jobError?.message || "Failed to create AI evaluation job.");
   }
 
   const { error: updateExamRunningError } = await supabase
@@ -1373,7 +1374,7 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
     throw new Error(updateExamRunningError.message);
   }
 
-  const studentAnswerIds = typedPendingEvaluations.map(
+  const studentAnswerIds = evaluations.map(
     (evaluation) => evaluation.student_answer_id,
   );
 
@@ -1387,23 +1388,23 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
   }
 
   const typedStudentAnswers = (studentAnswers ||
-    []) as StudentAnswerForMockAiRun[];
+    []) as StudentAnswerForAiBatchRun[];
 
-  const studentAnswerById = new Map<string, StudentAnswerForMockAiRun>();
-
-  for (const studentAnswer of typedStudentAnswers) {
-    studentAnswerById.set(studentAnswer.id, studentAnswer);
-  }
-
-  const questionIds = Array.from(
-    new Set(typedStudentAnswers.map((answer) => answer.question_id)),
+  const studentAnswerById = new Map(
+    typedStudentAnswers.map((answer) => [answer.id, answer]),
   );
+
+  const questionIds = [
+    ...new Set(typedStudentAnswers.map((answer) => answer.question_id)),
+  ];
 
   const { data: questions, error: questionsError } =
     questionIds.length > 0
       ? await supabase
           .from("questions")
-          .select("id, question_no, question_text, max_marks, model_answer")
+          .select(
+            "id, question_no, question_text, question_type, max_marks, model_answer",
+          )
           .in("id", questionIds)
       : { data: [], error: null };
 
@@ -1411,24 +1412,20 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
     throw new Error(questionsError.message);
   }
 
-  const typedQuestions = (questions || []) as QuestionForMockAiRun[];
+  const typedQuestions = (questions || []) as QuestionForAiBatchRun[];
 
-  const questionById = new Map<string, QuestionForMockAiRun>();
-
-  for (const question of typedQuestions) {
-    questionById.set(question.id, question);
-  }
-
-  const evaluationIds = typedPendingEvaluations.map(
-    (evaluation) => evaluation.id,
+  const questionById = new Map(
+    typedQuestions.map((question) => [question.id, question]),
   );
+
+  const evaluationIds = evaluations.map((evaluation) => evaluation.id);
 
   const { data: rubricBreakdowns, error: rubricBreakdownsError } =
     evaluationIds.length > 0
       ? await supabase
           .from("evaluation_rubric_breakdowns")
           .select(
-            "id, evaluation_id, criterion_name, criterion_description, max_marks",
+            "id, evaluation_id, rubric_id, criterion_name, criterion_description, max_marks",
           )
           .in("evaluation_id", evaluationIds)
       : { data: [], error: null };
@@ -1438,20 +1435,19 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
   }
 
   const typedRubricBreakdowns = (rubricBreakdowns ||
-    []) as RubricBreakdownForMockAiRun[];
+    []) as RubricBreakdownForAiBatchRun[];
 
   const breakdownsByEvaluationId = new Map<
     string,
-    RubricBreakdownForMockAiRun[]
+    RubricBreakdownForAiBatchRun[]
   >();
 
-  for (const evaluation of typedPendingEvaluations) {
+  for (const evaluation of evaluations) {
     breakdownsByEvaluationId.set(evaluation.id, []);
   }
 
   for (const breakdown of typedRubricBreakdowns) {
-    const existing =
-      breakdownsByEvaluationId.get(breakdown.evaluation_id) || [];
+    const existing = breakdownsByEvaluationId.get(breakdown.evaluation_id) || [];
     breakdownsByEvaluationId.set(breakdown.evaluation_id, [
       ...existing,
       breakdown,
@@ -1462,7 +1458,7 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
   let failedItems = 0;
   const failedMessages: string[] = [];
 
-  for (const evaluation of typedPendingEvaluations) {
+  for (const evaluation of evaluations) {
     try {
       const studentAnswer = studentAnswerById.get(evaluation.student_answer_id);
 
@@ -1486,42 +1482,44 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
         throw new Error("Rubric breakdown rows are missing.");
       }
 
-      const result = await evaluateAnswerWithAi({
-        question: {
-          questionNo: question.question_no,
-          questionText: question.question_text,
-          maxMarks: evaluation.max_marks,
-          modelAnswer: question.model_answer,
-          subject: exam.subject,
-          course: exam.course,
-        },
-        rubric: breakdowns.map((breakdown) => ({
+      const aiResult = await evaluateAnswerWithAi({
+        examId: exam.id,
+        studentAnswerId: studentAnswer.id,
+        subject: exam.subject,
+        examTitle: exam.title,
+        questionNo: question.question_no,
+        questionText: question.question_text,
+        questionType: question.question_type,
+        maxMarks: evaluation.max_marks,
+        modelAnswer: question.model_answer,
+        studentAnswer: studentAnswer.answer_text,
+        rubrics: breakdowns.map((breakdown) => ({
+          id: breakdown.rubric_id || breakdown.id,
           criterionName: breakdown.criterion_name,
           criterionDescription: breakdown.criterion_description,
           maxMarks: breakdown.max_marks,
         })),
-        studentAnswer: {
-          answerText: studentAnswer.answer_text,
-          wordCount: studentAnswer.word_count,
-          characterCount: studentAnswer.character_count,
-        },
       });
-
-      const { data } = result;
 
       const { error: updateEvaluationError } = await supabase
         .from("evaluations")
         .update({
-          ai_job_id: activeJobId,
-          ai_score: data.suggestedScore,
-          quality_label: data.qualityLabel,
-          ai_confidence: data.confidence,
-          ai_feedback: data.teacherReviewSummary,
-          teacher_review_summary: data.teacherReviewSummary,
-          student_facing_justification: data.studentFacingJustification,
-          what_student_did_well: data.whatStudentDidWell,
-          what_is_missing: data.whatIsMissing,
-          ai_raw_output: data.rawOutput,
+          ai_job_id: job.id,
+          ai_score: aiResult.suggestedScore,
+          max_marks: aiResult.maxMarks,
+          quality_label: aiResult.qualityLabel,
+          ai_confidence: aiResult.confidence,
+          ai_feedback: aiResult.teacherReviewSummary,
+          teacher_review_summary: aiResult.teacherReviewSummary,
+          student_facing_justification: aiResult.studentFacingJustification,
+          what_student_did_well: aiResult.whatStudentDidWell,
+          what_is_missing: aiResult.whatIsMissing,
+          ai_raw_output: aiResult.rawOutput,
+          ai_provider: aiResult.provider,
+          ai_model: aiResult.model,
+          ai_error_message: null,
+          ai_attempt_count: (evaluation.ai_attempt_count || 0) + 1,
+          ai_last_attempt_at: new Date().toISOString(),
           status: "professor_review_pending",
         })
         .eq("id", evaluation.id)
@@ -1532,9 +1530,12 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
       }
 
       for (const breakdown of breakdowns) {
-        const aiBreakdown = data.rubricBreakdown.find(
-          (item) => item.criterion === breakdown.criterion_name,
-        );
+        const aiBreakdown = aiResult.rubricBreakdown.find((item) => {
+          return (
+            item.rubricId === (breakdown.rubric_id || breakdown.id) ||
+            item.criterionName === breakdown.criterion_name
+          );
+        });
 
         if (!aiBreakdown) {
           throw new Error(
@@ -1563,6 +1564,35 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
         error instanceof Error ? error.message : "Unknown AI evaluation error.";
 
       failedMessages.push(`Evaluation ${evaluation.id}: ${message}`);
+
+      const { error: failedEvaluationUpdateError } = await supabase
+        .from("evaluations")
+        .update({
+          ai_job_id: job.id,
+          ai_error_message: message,
+          ai_attempt_count: (evaluation.ai_attempt_count || 0) + 1,
+          ai_last_attempt_at: new Date().toISOString(),
+          status: "pending",
+        })
+        .eq("id", evaluation.id)
+        .eq("exam_id", examId);
+
+      if (failedEvaluationUpdateError) {
+        throw new Error(failedEvaluationUpdateError.message);
+      }
+    }
+
+    const { error: progressUpdateError } = await supabase
+      .from("evaluation_jobs")
+      .update({
+        completed_items: completedItems,
+        failed_items: failedItems,
+      })
+      .eq("id", job.id)
+      .eq("exam_id", examId);
+
+    if (progressUpdateError) {
+      throw new Error(progressUpdateError.message);
     }
   }
 
@@ -1583,9 +1613,9 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
       failed_items: failedItems,
       completed_at: completedAt,
       error_message:
-        failedMessages.length > 0 ? failedMessages.join("\n") : null,
+        failedMessages.length > 0 ? failedMessages.slice(0, 10).join("\n") : null,
     })
-    .eq("id", activeJobId)
+    .eq("id", job.id)
     .eq("exam_id", examId);
 
   if (finishJobError) {
@@ -1606,15 +1636,7 @@ export async function runMockAiEvaluationForExam(formData: FormData) {
   }
 
   revalidatePath(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
-
-  if (failedItems > 0) {
-    throw new Error(
-      [
-        `Mock AI evaluation completed with ${failedItems} failed item(s).`,
-        ...failedMessages.slice(0, 5),
-      ].join("\n"),
-    );
-  }
+  revalidatePath(ROUTES.PROFESSOR.EXAM_REVIEW(examId));
 
   redirect(ROUTES.PROFESSOR.EXAM_DETAIL(examId));
 }
@@ -1644,4 +1666,19 @@ function readIsAiEvaluable(
   const normalized = String(value).toLowerCase()
 
   return normalized === "true" || normalized === "on" || normalized === "1"
+}
+
+function readAiEvaluationBatchSize() {
+  const rawValue = process.env.AI_EVALUATION_BATCH_SIZE || "5";
+  const parsed = Number(rawValue);
+
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return 5;
+  }
+
+  return Math.min(parsed, 20);
+}
+
+export async function runMockAiEvaluationForExam(formData: FormData) {
+  return runAiEvaluationBatchForExam(formData);
 }

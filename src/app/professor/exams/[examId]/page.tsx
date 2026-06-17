@@ -6,7 +6,7 @@ import {
   markExamRubricReady,
   importMappedAnswers,
   createEvaluationJobAndSeedPending,
-  runMockAiEvaluationForExam,
+  runAiEvaluationBatchForExam,
 } from "@/features/exams/actions";
 import {
   generateAnswerCellsForUpload,
@@ -220,7 +220,10 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
   }
 
   const { data: evaluationStatusRows, error: evaluationStatusRowsError } =
-    await supabase.from("evaluations").select("status").eq("exam_id", examId);
+    await supabase
+      .from("evaluations")
+      .select("status, ai_error_message")
+      .eq("exam_id", examId);
 
   if (evaluationStatusRowsError) {
     throw new Error(evaluationStatusRowsError.message);
@@ -236,6 +239,13 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
   }
 
   const pendingEvaluationCount = evaluationStatusCounts.get("pending") || 0;
+
+  const failedPendingEvaluationCount = (evaluationStatusRows || []).filter(
+    (row) => row.status === "pending" && row.ai_error_message,
+  ).length;
+
+  const cleanPendingEvaluationCount =
+    pendingEvaluationCount - failedPendingEvaluationCount;
 
   const professorReviewPendingCount =
     evaluationStatusCounts.get("professor_review_pending") || 0;
@@ -727,6 +737,15 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
         </p>
 
         <p>
+          <strong>Clean Pending Batch:</strong> {cleanPendingEvaluationCount}
+        </p>
+
+        <p>
+          <strong>Failed Pending Attempts:</strong>{" "}
+          {failedPendingEvaluationCount}
+        </p>
+
+        <p>
           <strong>Professor Review Pending:</strong>{" "}
           {professorReviewPendingCount}
         </p>
@@ -770,10 +789,24 @@ export default async function ExamDetailPage({ params }: ExamDetailPageProps) {
           )}
 
         {profile.role === "professor" && pendingEvaluationCount > 0 && (
-          <form action={runMockAiEvaluationForExam}>
+          <form action={runAiEvaluationBatchForExam}>
             <input type="hidden" name="examId" value={exam.id} />
 
-            <button type="submit">Run Mock AI Evaluation</button>
+            {failedPendingEvaluationCount > 0 && (
+              <div style={{ marginBottom: "8px" }}>
+                <label>
+                  <input name="retryFailedOnly" type="checkbox" /> Retry failed
+                  attempts only
+                </label>
+              </div>
+            )}
+
+            <button type="submit">Run AI Evaluation Batch</button>
+
+            <p style={{ fontSize: "13px", color: "#555" }}>
+              Runs only the configured batch size at a time. Failed attempts are
+              tracked and can be retried separately.
+            </p>
           </form>
         )}
 
